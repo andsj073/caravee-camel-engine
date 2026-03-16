@@ -19,7 +19,7 @@ var version = "dev"
 func main() {
 	dataDir := flag.String("data-dir", envOrDefault("CARAVEE_DATA_DIR", "/data"), "Base data directory")
 	routesDir := flag.String("routes-dir", envOrDefault("CARAVEE_ROUTES_DIR", "/data/routes"), "Route YAML output directory")
-	healthURL := flag.String("health-url", envOrDefault("CARAVEE_HEALTH_URL", "http://localhost:8080/q/health"), "Camel health endpoint")
+	healthURL := flag.String("health-url", envOrDefault("CARAVEE_HEALTH_URL", "http://localhost:8090/health"), "Camel health endpoint")
 	logLevel := flag.String("log-level", envOrDefault("CARAVEE_LOG_LEVEL", "info"), "Log level (debug/info/warn/error)")
 	flag.Parse()
 

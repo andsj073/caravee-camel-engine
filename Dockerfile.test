@@ -1,0 +1,21 @@
+# Test Dockerfile: Go agent + existing Camel Quarkus engine
+# Stage 1: Build Go agent
+FROM golang:1.22-alpine AS agent-build
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=0.1.0" -o caravee-agent ./cmd/agent
+
+# Stage 2: Use the existing caravee-engine Java image as base
+FROM caravee-engine:latest
+
+# Install curl for health checks (may already be there)
+USER root
+
+# Copy Go agent binary (~10MB)
+COPY --from=agent-build /build/caravee-agent /usr/local/bin/caravee-agent
+COPY entrypoint-hybrid.sh /entrypoint-hybrid.sh
+RUN chmod +x /entrypoint-hybrid.sh
+
+ENTRYPOINT ["/entrypoint-hybrid.sh"]
