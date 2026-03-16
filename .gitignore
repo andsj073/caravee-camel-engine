@@ -1,0 +1,17 @@
+# Binaries
+caravee-agent
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Go
+vendor/
+
+# Data (runtime)
+/data/
