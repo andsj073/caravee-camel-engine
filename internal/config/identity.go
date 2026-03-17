@@ -73,5 +73,11 @@ func generateEngineID() string {
 	return fmt.Sprintf("caravee-engine-%x", b)
 }
 
+// SaveIdentity updates the engine ID file (used after pairing assigns final ID).
+func SaveIdentity(dataDir string, identity *Identity) error {
+	idFile := filepath.Join(dataDir, "engine-id")
+	return os.WriteFile(idFile, []byte(identity.EngineID+"\n"), 0600)
+}
+
 // Placeholder for crypto sub-package
 var _ = crypto.Placeholder

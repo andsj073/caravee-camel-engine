@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/caravee/engine/internal/pairing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,29 +63,57 @@ func pair(cloudURL string, identity *Identity) (*CloudConfig, error) {
 		return nil, fmt.Errorf("invalid pairing URL: %w", err)
 	}
 
-	tenantID := u.Query().Get("tenant")
 	otp := u.Query().Get("otp")
-	if tenantID == "" || otp == "" {
-		return nil, fmt.Errorf("pairing URL must contain tenant and otp parameters")
+	if otp == "" {
+		return nil, fmt.Errorf("pairing URL must contain otp parameter")
 	}
 
-	// POST to pairing endpoint
-	// For MVP: derive WSS URL from pairing URL
+	// Generate keypair (if not exists)
+	dataDir := filepath.Dir(filepath.Join(".", configFile))
+	if err := generateKeypair(dataDir); err != nil {
+		return nil, fmt.Errorf("generate keypair: %w", err)
+	}
+
+	// Load public key
+	pubKey, err := loadPublicKey(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("load public key: %w", err)
+	}
+
+	// Call pairing endpoint (same base URL as pairing link)
 	baseURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	wssScheme := "wss"
-	if u.Scheme == "http" {
-		wssScheme = "ws"
-	}
-	wssURL := fmt.Sprintf("%s://%s/ws/engine", wssScheme, u.Host)
+	pairEndpoint := baseURL + "/api/v1/pairing/pair"
 
-	// TODO: Implement actual HTTP POST to pairing endpoint
-	// For now: extract connection info from URL
-	slog.Info("Paired successfully", "tenant_id", tenantID, "wss_url", wssURL)
+	slog.Info("Calling pairing endpoint", "url", pairEndpoint, "otp", otp)
+	pairResp, err := callPairingEndpoint(pairEndpoint, otp, pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("pairing request failed: %w", err)
+	}
+
+	// Update engine ID in identity file (cloud assigns the final ID)
+	identity.EngineID = pairResp.EngineID
+	if err := SaveIdentity(dataDir, identity); err != nil {
+		slog.Warn("Failed to update engine ID", "error", err)
+	}
+
+	slog.Info("Pairing successful", "engine_id", pairResp.EngineID, "tenant_id", pairResp.TenantID)
 
 	return &CloudConfig{
-		TenantID: tenantID,
-		WSSURL:   wssURL,
-		Label:    "",
-		PairedAt: fmt.Sprintf("%s", baseURL), // placeholder
+		TenantID: pairResp.TenantID,
+		WSSURL:   pairResp.WSSURL,
+		Label:    pairResp.Label,
+		PairedAt: "",  // TODO: timestamp
 	}, nil
+}
+
+func generateKeypair(dataDir string) error {
+	return pairing.GenerateKeypair(dataDir)
+}
+
+func loadPublicKey(dataDir string) (string, error) {
+	return pairing.LoadPublicKey(dataDir)
+}
+
+func callPairingEndpoint(url, otp, publicKey string) (*pairing.PairResponse, error) {
+	return pairing.Pair(url, otp, publicKey)
 }
