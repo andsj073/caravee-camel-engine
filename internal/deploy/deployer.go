@@ -32,8 +32,9 @@ func (d *Deployer) Deploy(routeID, camelYAML string, bundleSecrets map[string]st
 	// Substitute secrets: {{ VAR }} → value
 	resolved := d.resolveSecrets(camelYAML, bundleSecrets)
 
-	// Write file
-	filename := routeID + ".yaml"
+	// Write file — replace dots with dashes (Camel treats dots as extension separators)
+	safeID := strings.ReplaceAll(routeID, ".", "-")
+	filename := safeID + ".yaml"
 	filePath := filepath.Join(d.routesDir, filename)
 
 	if err := os.WriteFile(filePath, []byte(resolved), 0644); err != nil {
@@ -47,14 +48,16 @@ func (d *Deployer) Deploy(routeID, camelYAML string, bundleSecrets map[string]st
 // Undeploy removes all route files for an integration.
 // Integration routes are namespaced: {integration_id}.{route_name}.yaml
 func (d *Deployer) Undeploy(integrationID string) error {
-	pattern := filepath.Join(d.routesDir, integrationID+".*.yaml")
+	// Routes use dashes: {integration}-{route}.yaml
+	safeID := strings.ReplaceAll(integrationID, ".", "-")
+	pattern := filepath.Join(d.routesDir, safeID+"-*.yaml")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return fmt.Errorf("glob routes: %w", err)
 	}
 
 	// Also try exact match (single-route integration)
-	exact := filepath.Join(d.routesDir, integrationID+".yaml")
+	exact := filepath.Join(d.routesDir, safeID+".yaml")
 	if _, err := os.Stat(exact); err == nil {
 		matches = append(matches, exact)
 	}
