@@ -68,8 +68,10 @@ func pair(cloudURL string, identity *Identity) (*CloudConfig, error) {
 		return nil, fmt.Errorf("pairing URL must contain otp parameter")
 	}
 
+	// Get data dir from identity
+	dataDir := identity.DataDir
+	
 	// Generate keypair (if not exists)
-	dataDir := filepath.Dir(filepath.Join(".", configFile))
 	if err := generateKeypair(dataDir); err != nil {
 		return nil, fmt.Errorf("generate keypair: %w", err)
 	}
