@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/caravee/engine/internal/config"
 	"github.com/caravee/engine/internal/deploy"
 	"github.com/caravee/engine/internal/health"
+	"github.com/caravee/engine/internal/pairing"
 	"github.com/gorilla/websocket"
 )
 
@@ -27,6 +29,7 @@ type Connection struct {
 	identity *config.Identity
 	deployer *deploy.Deployer
 	health   *health.Poller
+	privKey  *rsa.PrivateKey // For decrypting secrets
 	ws       *websocket.Conn
 	mu       sync.Mutex
 	done     chan struct{}
@@ -35,11 +38,19 @@ type Connection struct {
 
 // NewConnection creates a new cloud connection.
 func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer *deploy.Deployer, healthPoller *health.Poller) *Connection {
+	// Load private key for secret decryption
+	privKey, err := pairing.LoadPrivateKey(identity.DataDir)
+	if err != nil {
+		slog.Warn("Failed to load private key — secrets decryption unavailable", "error", err)
+		privKey = nil
+	}
+
 	return &Connection{
 		cfg:      cfg,
 		identity: identity,
 		deployer: deployer,
 		health:   healthPoller,
+		privKey:  privKey,
 		done:     make(chan struct{}),
 		startAt:  time.Now(),
 	}
@@ -183,13 +194,21 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 		Revision:      dm.Revision,
 	}
 
-	// Build secret map
+	// Build secret map — decrypt cipher if present
 	secrets := make(map[string]string)
 	for _, s := range dm.Secrets {
-		if s.Value != "" {
-			secrets[s.Var] = s.Value // MVP: plaintext
+		if s.Cipher != "" {
+			// Decrypt with engine private key
+			plaintext, err := c.decryptSecret(s.Cipher)
+			if err != nil {
+				slog.Error("Failed to decrypt secret", "var", s.Var, "error", err)
+				continue
+			}
+			secrets[s.Var] = plaintext
+		} else if s.Value != "" {
+			// Fallback: plaintext (dev mode)
+			secrets[s.Var] = s.Value
 		}
-		// Phase 2: decrypt s.Cipher with engine private key
 	}
 
 	// Deploy routes
@@ -296,4 +315,11 @@ func routeIDs(routes []RouteBundle) []string {
 		ids[i] = r.ID
 	}
 	return ids
+}
+
+func (c *Connection) decryptSecret(cipherBase64 string) (string, error) {
+	if c.privKey == nil {
+		return "", fmt.Errorf("private key not loaded")
+	}
+	return pairing.DecryptSecret(cipherBase64, c.privKey)
 }
