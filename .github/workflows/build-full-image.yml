@@ -3,12 +3,6 @@ name: Build Full Engine Image
 on:
   push:
     branches: [main]
-    paths:
-      - 'camel-runtime/**'
-      - 'Dockerfile.full'
-      - 'entrypoint.sh'
-      - 'cmd/**'
-      - 'internal/**'
   workflow_dispatch:  # allow manual trigger
 
 permissions:
