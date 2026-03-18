@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Caravee Agent only — no Camel sidecar
+# Use this when you already have Camel running, or for testing the pairing flow.
+# Point CARAVEE_CAMEL_URL at your Camel instance.
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: caravee
+      POSTGRES_USER: caravee
+      POSTGRES_PASSWORD: caravee
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caravee"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  agent:
+    image: ghcr.io/andsj073/caravee-engine:agent
+    restart: unless-stopped
+    environment:
+      CARAVEE_CLOUD: ${CARAVEE_CLOUD}
+      CARAVEE_CAMEL_URL: ${CARAVEE_CAMEL_URL:-http://localhost:8090}
+      CARAVEE_DATA_DIR: /data
+      CARAVEE_ROUTES_DIR: /data/routes
+      CARAVEE_LOG_LEVEL: ${CARAVEE_LOG_LEVEL:-info}
+    volumes:
+      - engine-data:/data
+    command:
+      - -data-dir=/data
+      - -routes-dir=/data/routes
+      - -camel-url=${CARAVEE_CAMEL_URL:-http://localhost:8090}
+
+volumes:
+  postgres-data:
+  engine-data:
