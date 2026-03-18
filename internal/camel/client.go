@@ -199,3 +199,4 @@ type mpCheck struct {
 	Status string            `json:"status"`
 	Data   map[string]string `json:"data,omitempty"`
 }
+

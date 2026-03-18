@@ -9,7 +9,9 @@ const (
 	MsgTypeSuspendRoute  = "suspend_route"
 	MsgTypeResumeRoute   = "resume_route"
 	MsgTypeRouteStatus   = "route_status"
-	MsgTypeCheckVars     = "check_vars"
+	MsgTypeCheckVars       = "check_vars"
+	MsgTypeGetEngineMetrics = "get_engine_metrics"
+	MsgTypeGetRouteMetrics  = "get_route_metrics"
 	MsgTypePing          = "ping"
 	MsgTypeTelemetry     = "telemetry"
 	MsgTypeSetLabel      = "set_label"
@@ -20,7 +22,9 @@ const (
 	MsgTypeConnected      = "connected"
 	MsgTypeDeployResult   = "deploy_result"
 	MsgTypeRouteResult    = "route_result"
-	MsgTypeVarsResult     = "vars_result"
+	MsgTypeVarsResult      = "vars_result"
+	MsgTypeEngineMetrics   = "engine_metrics"
+	MsgTypeRouteMetrics    = "route_metrics"
 	MsgTypePong           = "pong"
 	MsgTypeHealth         = "telemetry"
 	MsgTypeError          = "error"
@@ -156,4 +160,41 @@ type SystemMetrics struct {
 	CPUPercent    float64 `json:"cpu_percent"`
 	MemoryMB      int64   `json:"memory_mb"`
 	UptimeSeconds int64   `json:"uptime_seconds"`
+}
+
+// GetEngineMetricsMessage requests engine-level metrics (CPU, mem, uptime).
+type GetEngineMetricsMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+}
+
+// GetRouteMetricsMessage requests metrics for a single route.
+type GetRouteMetricsMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	RouteID   string `json:"route_id"`
+}
+
+// EngineMetrics contains engine-level runtime data.
+type EngineMetrics struct {
+	Type          string  `json:"type"`
+	RequestID     string  `json:"request_id"`
+	Available     bool    `json:"available"`     // false when Camel sidecar not running
+	UptimeSeconds float64 `json:"uptime_seconds"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryUsedMB  float64 `json:"memory_used_mb"`
+	MemoryMaxMB   float64 `json:"memory_max_mb"`
+}
+
+// RouteMetrics contains per-route exchange metrics.
+type RouteMetrics struct {
+	Type            string  `json:"type"`
+	RequestID       string  `json:"request_id"`
+	RouteID         string  `json:"route_id"`
+	Available       bool    `json:"available"`
+	ExchangesTotal  float64 `json:"exchanges_total"`
+	ExchangesFailed float64 `json:"exchanges_failed"`
+	ExchangesInflight float64 `json:"exchanges_inflight"`
+	MeanDurationMs  float64 `json:"mean_duration_ms"`
+	MaxDurationMs   float64 `json:"max_duration_ms"`
 }

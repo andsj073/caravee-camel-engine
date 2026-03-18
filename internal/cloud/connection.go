@@ -167,6 +167,16 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 		}
 		c.handleDeploy(dm)
 
+	case MsgTypeGetEngineMetrics:
+		var req GetEngineMetricsMessage
+		json.Unmarshal(msg.Raw, &req)
+		go c.handleGetEngineMetrics(req)
+
+	case MsgTypeGetRouteMetrics:
+		var req GetRouteMetricsMessage
+		json.Unmarshal(msg.Raw, &req)
+		go c.handleGetRouteMetrics(req)
+
 	case MsgTypeCheckVars:
 		var cv CheckVarsMessage
 		if err := json.Unmarshal(msg.Raw, &cv); err != nil {
@@ -276,6 +286,46 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 	}
 
 	c.sendMessage(result)
+}
+
+func (c *Connection) handleGetEngineMetrics(req GetEngineMetricsMessage) {
+	m, err := c.camel.GetEngineMetrics()
+	result := &EngineMetrics{
+		Type:      MsgTypeEngineMetrics,
+		RequestID: req.RequestID,
+		Available: err == nil,
+	}
+	if err == nil {
+		result.UptimeSeconds = m["process_uptime_seconds"]
+		result.CPUPercent    = m["process_cpu_usage"] * 100
+		result.MemoryUsedMB  = m["jvm_memory_used_bytes"] / 1024 / 1024
+		result.MemoryMaxMB   = m["jvm_memory_max_bytes"] / 1024 / 1024
+	}
+	c.sendMessage(result)
+}
+
+func (c *Connection) handleGetRouteMetrics(req GetRouteMetricsMessage) {
+	m, err := c.camel.GetRouteMetrics(req.RouteID)
+	result := &RouteMetrics{
+		Type:      MsgTypeRouteMetrics,
+		RequestID: req.RequestID,
+		RouteID:   req.RouteID,
+		Available: err == nil,
+	}
+	if err == nil {
+		result.ExchangesTotal   = m["camel_exchanges_total"]
+		result.ExchangesFailed  = m["camel_exchanges_failed_total"]
+		result.ExchangesInflight = m["camel_exchanges_inflight"]
+		result.MeanDurationMs   = m["camel_exchange_duration_milliseconds_sum"] /
+			max(m["camel_exchange_duration_milliseconds_count"], 1)
+		result.MaxDurationMs    = m["camel_exchange_duration_milliseconds_max"]
+	}
+	c.sendMessage(result)
+}
+
+func max(a, b float64) float64 {
+	if a > b { return a }
+	return b
 }
 
 func (c *Connection) handleCheckVars(msg CheckVarsMessage) {
