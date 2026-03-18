@@ -1,0 +1,69 @@
+version: "3.9"
+
+# Caravee Engine stack — Go agent + Camel Quarkus sidecar + Postgres
+#
+# Usage:
+#   docker compose up -d
+#   CARAVEE_CLOUD="http://cloud:8100/api/v1/pairing/pair?otp=123456" docker compose up
+#
+# Postgres is available inside the container at:
+#   jdbc:postgresql://localhost:5432/caravee
+#   (or from host: localhost:5433)
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: caravee
+      POSTGRES_USER: caravee
+      POSTGRES_PASSWORD: caravee
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"          # Expose on 5433 to avoid conflicts with host Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caravee"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  engine:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Cloud connection (set via env or pairing URL)
+      CARAVEE_CLOUD: ${CARAVEE_CLOUD:-}
+      CARAVEE_ENGINE_ID: ${CARAVEE_ENGINE_ID:-}
+      CARAVEE_LOG_LEVEL: ${CARAVEE_LOG_LEVEL:-info}
+
+      # Camel sidecar base URL (sidecar runs on same network namespace)
+      CARAVEE_CAMEL_URL: http://localhost:8090
+
+      # Postgres (available to Camel routes via env substitution)
+      # Routes can reference these as {{env:CARAVEE_DB_HOST}} etc.
+      CARAVEE_DB_HOST: localhost
+      CARAVEE_DB_PORT: 5432
+      CARAVEE_DB_NAME: caravee
+      CARAVEE_DB_USER: caravee
+      CARAVEE_DB_PASSWORD: caravee
+      CARAVEE_DB_URL: jdbc:postgresql://localhost:5432/caravee
+
+      # Camel Quarkus datasource (picked up automatically by Quarkus)
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://localhost:5432/caravee
+      QUARKUS_DATASOURCE_USERNAME: caravee
+      QUARKUS_DATASOURCE_PASSWORD: caravee
+
+    volumes:
+      - engine-data:/data
+    network_mode: host         # Agent + Camel + Postgres all on localhost
+    ports:
+      - "8090:8090"            # Camel HTTP (if not using host mode)
+
+volumes:
+  postgres-data:
+  engine-data:
