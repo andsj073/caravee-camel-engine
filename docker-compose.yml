@@ -30,7 +30,8 @@ services:
       retries: 10
 
   engine:
-    build: .
+    image: ghcr.io/andsj073/caravee-engine:latest
+    # build: .  # uncomment to build locally instead
     restart: unless-stopped
     depends_on:
       postgres:
