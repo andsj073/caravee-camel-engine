@@ -4,21 +4,41 @@ import "encoding/json"
 
 // Message types from cloud → agent
 const (
-	MsgTypeDeploy    = "deploy"
-	MsgTypeUndeploy  = "undeploy"
-	MsgTypePing      = "ping"
-	MsgTypeTelemetry = "telemetry"
-	MsgTypeSetLabel  = "set_label"
+	MsgTypeDeploy        = "deploy"
+	MsgTypeUndeploy      = "undeploy"
+	MsgTypeSuspendRoute  = "suspend_route"
+	MsgTypeResumeRoute   = "resume_route"
+	MsgTypeRouteStatus   = "route_status"
+	MsgTypePing          = "ping"
+	MsgTypeTelemetry     = "telemetry"
+	MsgTypeSetLabel      = "set_label"
 )
 
 // Message types from agent → cloud
 const (
-	MsgTypeConnected    = "connected"
-	MsgTypeDeployResult = "deploy_result"
-	MsgTypePong         = "pong"
-	MsgTypeHealth       = "telemetry"
-	MsgTypeError        = "error"
+	MsgTypeConnected      = "connected"
+	MsgTypeDeployResult   = "deploy_result"
+	MsgTypeRouteResult    = "route_result"
+	MsgTypePong           = "pong"
+	MsgTypeHealth         = "telemetry"
+	MsgTypeError          = "error"
 )
+
+// RouteCommandMessage is a suspend/resume/status command for a single route.
+type RouteCommandMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	RouteID   string `json:"route_id"`
+}
+
+// RouteResultMessage reports the result of a route command.
+type RouteResultMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	RouteID   string `json:"route_id"`
+	Status    string `json:"status"` // Started | Suspended | Stopped | NotFound | error
+	Error     string `json:"error,omitempty"`
+}
 
 // InboundMessage is a generic message from cloud.
 type InboundMessage struct {

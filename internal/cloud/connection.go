@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/caravee/engine/internal/camel"
 	"github.com/caravee/engine/internal/config"
 	"github.com/caravee/engine/internal/deploy"
-	"github.com/caravee/engine/internal/health"
 	"github.com/caravee/engine/internal/pairing"
+	"github.com/caravee/engine/internal/system"
 	"github.com/gorilla/websocket"
 )
 
@@ -28,7 +29,7 @@ type Connection struct {
 	cfg      *config.CloudConfig
 	identity *config.Identity
 	deployer *deploy.Deployer
-	health   *health.Poller
+	camel   *camel.Client
 	privKey  *rsa.PrivateKey // For decrypting secrets
 	ws       *websocket.Conn
 	mu       sync.Mutex
@@ -37,7 +38,7 @@ type Connection struct {
 }
 
 // NewConnection creates a new cloud connection.
-func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer *deploy.Deployer, healthPoller *health.Poller) *Connection {
+func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer *deploy.Deployer, camelClient *camel.Client) *Connection {
 	// Load private key for secret decryption
 	privKey, err := pairing.LoadPrivateKey(identity.DataDir)
 	if err != nil {
@@ -49,7 +50,7 @@ func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer 
 		cfg:      cfg,
 		identity: identity,
 		deployer: deployer,
-		health:   healthPoller,
+		camel:   camelClient,
 		privKey:  privKey,
 		done:     make(chan struct{}),
 		startAt:  time.Now(),
@@ -153,6 +154,14 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 		}
 		c.handleDeploy(dm)
 
+	case MsgTypeSuspendRoute, MsgTypeResumeRoute, MsgTypeRouteStatus:
+		var cmd RouteCommandMessage
+		if err := json.Unmarshal(msg.Raw, &cmd); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
+		c.handleRouteCommand(msg.Type, cmd)
+
 	case MsgTypeUndeploy:
 		var um UndeployMessage
 		if err := json.Unmarshal(msg.Raw, &um); err != nil {
@@ -233,7 +242,7 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 		// Wait for Camel to pick up routes, then verify health
 		go func() {
 			time.Sleep(3 * time.Second)
-			healthStatuses := c.health.CheckRoutes(routeIDs(dm.Routes))
+			healthStatuses := c.camel.CheckRoutes(routeIDs(dm.Routes))
 			for i, rs := range routeStatuses {
 				if hs, ok := healthStatuses[rs.ID]; ok {
 					routeStatuses[i].Status = hs
@@ -243,6 +252,40 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 			result.Routes = routeStatuses
 			c.sendMessage(result)
 		}()
+	}
+
+	c.sendMessage(result)
+}
+
+func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage) {
+	result := &RouteResultMessage{
+		Type:      MsgTypeRouteResult,
+		RequestID: cmd.RequestID,
+		RouteID:   cmd.RouteID,
+	}
+
+	var err error
+	switch msgType {
+	case MsgTypeSuspendRoute:
+		err = c.camel.SuspendRoute(cmd.RouteID)
+		if err == nil {
+			result.Status = "Suspended"
+		}
+	case MsgTypeResumeRoute:
+		err = c.camel.ResumeRoute(cmd.RouteID)
+		if err == nil {
+			result.Status = "Started"
+		}
+	case MsgTypeRouteStatus:
+		result.Status, err = c.camel.RouteStatus(cmd.RouteID)
+	}
+
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+		slog.Error("Route command failed", "type", msgType, "route", cmd.RouteID, "error", err)
+	} else {
+		slog.Info("Route command ok", "type", msgType, "route", cmd.RouteID, "status", result.Status)
 	}
 
 	c.sendMessage(result)
@@ -265,8 +308,8 @@ func (c *Connection) handleUndeploy(um UndeployMessage) {
 }
 
 func (c *Connection) handleTelemetry(requestID string) {
-	healthData := c.health.GetHealth()
-	sysMetrics := health.GetSystemMetrics()
+	healthData := c.camel.GetHealth()
+	sysMetrics := system.GetSystemMetrics()
 
 	// Convert health types to cloud message types
 	routes := make([]RouteStatus, len(healthData.Routes))

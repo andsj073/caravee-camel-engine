@@ -8,26 +8,24 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/caravee/engine/internal/camel"
 	"github.com/caravee/engine/internal/cloud"
 	"github.com/caravee/engine/internal/config"
 	"github.com/caravee/engine/internal/deploy"
-	"github.com/caravee/engine/internal/health"
 )
 
 var version = "dev"
 
 func main() {
-	dataDir := flag.String("data-dir", envOrDefault("CARAVEE_DATA_DIR", "/data"), "Base data directory")
-	routesDir := flag.String("routes-dir", envOrDefault("CARAVEE_ROUTES_DIR", "/data/routes"), "Route YAML output directory")
-	healthURL := flag.String("health-url", envOrDefault("CARAVEE_HEALTH_URL", "http://localhost:8090/health"), "Camel health endpoint")
-	logLevel := flag.String("log-level", envOrDefault("CARAVEE_LOG_LEVEL", "info"), "Log level (debug/info/warn/error)")
+	dataDir  := flag.String("data-dir",  envOrDefault("CARAVEE_DATA_DIR",  "/data"),                    "Base data directory")
+	routesDir := flag.String("routes-dir", envOrDefault("CARAVEE_ROUTES_DIR", "/data/routes"),            "Route YAML output directory")
+	camelURL := flag.String("camel-url", envOrDefault("CARAVEE_CAMEL_URL", "http://localhost:8090"),     "Camel sidecar base URL")
+	logLevel := flag.String("log-level", envOrDefault("CARAVEE_LOG_LEVEL", "info"),                      "Log level (debug/info/warn/error)")
 	flag.Parse()
 
-	// Setup logging
 	setupLogging(*logLevel)
-	slog.Info("Caravee Engine Agent starting", "version", version, "data_dir", *dataDir, "routes_dir", *routesDir)
+	slog.Info("Caravee Engine Agent starting", "version", version, "data_dir", *dataDir, "camel_url", *camelURL)
 
-	// Load or create identity
 	identity, err := config.LoadOrCreateIdentity(*dataDir)
 	if err != nil {
 		slog.Error("Failed to initialize identity", "error", err)
@@ -35,7 +33,6 @@ func main() {
 	}
 	slog.Info("Engine identity", "engine_id", identity.EngineID)
 
-	// Load or perform pairing
 	cfg, err := config.LoadOrPair(*dataDir, identity)
 	if err != nil {
 		slog.Error("Failed to configure cloud connection", "error", err)
@@ -43,18 +40,14 @@ func main() {
 	}
 	slog.Info("Cloud connection configured", "tenant_id", cfg.TenantID, "wss_url", cfg.WSSURL)
 
-	// Initialize components
-	secretMgr := deploy.NewSecretManager(*dataDir)
-	deployer := deploy.NewDeployer(*routesDir, secretMgr)
-	healthPoller := health.NewPoller(*healthURL)
+	secretMgr    := deploy.NewSecretManager(*dataDir)
+	deployer     := deploy.NewDeployer(*routesDir, secretMgr)
+	camelClient  := camel.New(*camelURL)
 
-	// Connect to cloud
-	conn := cloud.NewConnection(cfg, identity, deployer, healthPoller)
+	conn := cloud.NewConnection(cfg, identity, deployer, camelClient)
 
-	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
 	go func() {
 		sig := <-sigCh
 		slog.Info("Received signal, shutting down", "signal", sig)
@@ -62,7 +55,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Run (blocks until connection is permanently lost)
 	if err := conn.Run(); err != nil {
 		slog.Error("Cloud connection failed permanently", "error", err)
 		os.Exit(1)
