@@ -50,8 +50,7 @@ services:
     image: ghcr.io/andsj073/caravee-engine:agent   # Caravee agent — open source, auditable
     restart: unless-stopped
     depends_on:
-      camel:
-        condition: service_healthy
+      - postgres  # camel is optional — agent works without sidecar (graceful degradation)
     environment:
       CARAVEE_CLOUD: ${CARAVEE_CLOUD}
       CARAVEE_CAMEL_URL: http://camel:8090
