@@ -29,7 +29,7 @@ services:
       retries: 10
 
   camel:
-    image: apache/camel-jbang:latest   # Apache Foundation — community-maintained
+    image: apache/camel-jbang:4.18.0   # Apache Foundation — community-maintained
     restart: unless-stopped
     volumes:
       - engine-data:/data
