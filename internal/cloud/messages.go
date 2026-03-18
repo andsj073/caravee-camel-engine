@@ -78,10 +78,11 @@ type UndeployMessage struct {
 // ConnectedMessage is sent by agent after WSS connect.
 // Uses camelCase JSON keys to match backend expectations.
 type ConnectedMessage struct {
-	Type     string            `json:"type"`
-	EngineID string            `json:"engineId"`
-	Version  string            `json:"version"`
-	Metadata map[string]string `json:"metadata"`
+	Type           string            `json:"type"`
+	EngineID       string            `json:"engineId"`
+	Version        string            `json:"version"`
+	Metadata       map[string]string `json:"metadata"`
+	DeployedRoutes []string          `json:"deployedRoutes"` // Integration IDs currently deployed on disk
 }
 
 // DeployResultMessage reports deploy outcome.

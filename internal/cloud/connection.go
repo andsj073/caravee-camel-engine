@@ -114,6 +114,12 @@ func (c *Connection) connectAndServe() error {
 	slog.Info("Connected to cloud")
 
 	// Send connected message
+	deployed, err := c.deployer.ListDeployed()
+	if err != nil {
+		slog.Warn("Could not list deployed routes", "error", err)
+		deployed = []string{}
+	}
+
 	c.sendMessage(&ConnectedMessage{
 		Type:     MsgTypeConnected,
 		EngineID: c.identity.EngineID,
@@ -122,7 +128,9 @@ func (c *Connection) connectAndServe() error {
 			"os":   "linux",
 			"arch": "amd64",
 		},
+		DeployedRoutes: deployed,
 	})
+	slog.Info("Reported deployed routes", "count", len(deployed), "routes", deployed)
 
 	// Message loop
 	for {
