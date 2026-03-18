@@ -25,6 +25,7 @@ const (
 	MsgTypeVarsResult      = "vars_result"
 	MsgTypeEngineMetrics   = "engine_metrics"
 	MsgTypeRouteMetrics    = "route_metrics"
+	MsgTypeRouteError      = "route_error"
 	MsgTypePong           = "pong"
 	MsgTypeHealth         = "telemetry"
 	MsgTypeError          = "error"
@@ -197,4 +198,15 @@ type RouteMetrics struct {
 	ExchangesInflight float64 `json:"exchanges_inflight"`
 	MeanDurationMs  float64 `json:"mean_duration_ms"`
 	MaxDurationMs   float64 `json:"max_duration_ms"`
+}
+
+// RouteErrorMessage is pushed from engine to cloud when failures are detected.
+type RouteErrorMessage struct {
+	Type          string  `json:"type"`
+	EngineID      string  `json:"engine_id"`
+	IntegrationID string  `json:"integration_id"`
+	FailureDelta  float64 `json:"failure_delta"`
+	TotalFailures float64 `json:"total_failures"`
+	InFlight      float64 `json:"inflight"`
+	Timestamp     string  `json:"timestamp"`
 }

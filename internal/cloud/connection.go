@@ -13,6 +13,7 @@ import (
 	"github.com/caravee/engine/internal/camel"
 	"github.com/caravee/engine/internal/config"
 	"github.com/caravee/engine/internal/deploy"
+	"github.com/caravee/engine/internal/monitor"
 	"github.com/caravee/engine/internal/pairing"
 	"github.com/caravee/engine/internal/system"
 	"github.com/gorilla/websocket"
@@ -59,6 +60,11 @@ func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer 
 
 // Run connects and handles messages. Blocks until permanently closed.
 func (c *Connection) Run() error {
+	// Start error monitor (polls Camel metrics, pushes route_error events)
+	mon := monitor.New(c.camel, c)
+	mon.Start()
+	defer mon.Stop()
+
 	attempt := 0
 	for {
 		select {
@@ -286,6 +292,25 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 	}
 
 	c.sendMessage(result)
+}
+
+// SendRouteError satisfies monitor.Sender — pushes error event to cloud.
+func (c *Connection) SendRouteError(evt monitor.RouteErrorEvent) {
+	c.sendMessage(&RouteErrorMessage{
+		Type:          MsgTypeRouteError,
+		EngineID:      c.identity.EngineID,
+		IntegrationID: evt.IntegrationID,
+		FailureDelta:  evt.FailureDelta,
+		TotalFailures: evt.TotalFailures,
+		InFlight:      evt.InFlight,
+		Timestamp:     evt.Timestamp,
+	})
+}
+
+// ListDeployedRoutes satisfies monitor.Sender — returns currently deployed route IDs.
+func (c *Connection) ListDeployedRoutes() []string {
+	routes, _ := c.deployer.ListDeployed()
+	return routes
 }
 
 func (c *Connection) handleGetEngineMetrics(req GetEngineMetricsMessage) {
