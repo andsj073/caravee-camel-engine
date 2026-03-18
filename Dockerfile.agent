@@ -1,0 +1,29 @@
+# Caravee Engine — Minimal agent image
+#
+# Runs alongside an existing Camel instance (any flavour).
+# The agent is the only code we ship — Camel is the customer's responsibility.
+#
+# Usage with community Camel JBang:
+#   docker run -d apache/camel-jbang              # customer's Camel
+#   docker run -d caravee-engine:agent            # our agent, sidecar
+#
+# Or as a single compose stack (see docker-compose.full.yml)
+
+FROM golang:1.22 AS build
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o caravee-engine ./cmd/agent/
+
+# ── Minimal runtime — just the binary ─────────────────────────────────────
+FROM gcr.io/distroless/static:nonroot
+
+COPY --from=build /build/caravee-engine /caravee-engine
+
+VOLUME /data
+
+ENTRYPOINT ["/caravee-engine"]

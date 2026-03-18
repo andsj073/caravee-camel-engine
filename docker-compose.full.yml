@@ -1,0 +1,73 @@
+version: "3.9"
+
+# Caravee full stack — community Camel JBang + our agent + Postgres
+#
+# Camel JBang: apache/camel (Apache Foundation, community-maintained)
+# Agent: caravee-engine:agent (our code, minimal, open source)
+#
+# Usage:
+#   CARAVEE_CLOUD="https://cloud.caravee.io/api/v1/pairing/pair?otp=XXXX" \
+#   docker compose -f docker-compose.full.yml up -d
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: caravee
+      POSTGRES_USER: caravee
+      POSTGRES_PASSWORD: caravee
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caravee"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  camel:
+    image: apache/camel-jbang:latest   # Apache Foundation — community-maintained
+    restart: unless-stopped
+    volumes:
+      - engine-data:/data
+    environment:
+      # Route hot-reload from shared volume
+      CAMEL_MAIN_ROUTES_INCLUDE_PATTERN: "file:/data/routes/*.yaml"
+      CAMEL_MAIN_ROUTES_RELOAD_ENABLED: "true"
+      CAMEL_MAIN_ROUTES_RELOAD_DIRECTORY: "/data/routes"
+      # Postgres datasource (for JDBC sinks)
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/caravee
+      QUARKUS_DATASOURCE_USERNAME: caravee
+      QUARKUS_DATASOURCE_PASSWORD: caravee
+    ports:
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/observe/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  agent:
+    image: ghcr.io/andsj073/caravee-engine:agent   # our code — minimal, auditable
+    restart: unless-stopped
+    environment:
+      CARAVEE_CLOUD: ${CARAVEE_CLOUD}
+      CARAVEE_CAMEL_URL: http://camel:8090
+      CARAVEE_DATA_DIR: /data
+      CARAVEE_ROUTES_DIR: /data/routes
+      CARAVEE_LOG_LEVEL: ${CARAVEE_LOG_LEVEL:-info}
+    volumes:
+      - engine-data:/data
+    depends_on:
+      camel:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  engine-data:
