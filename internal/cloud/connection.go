@@ -120,6 +120,9 @@ func (c *Connection) connectAndServe() error {
 		deployed = []string{}
 	}
 
+	// Collect local var names (secrets.env keys + env vars that look like binding vars)
+	localVars := c.deployer.ListVarNames()
+
 	c.sendMessage(&ConnectedMessage{
 		Type:     MsgTypeConnected,
 		EngineID: c.identity.EngineID,
@@ -129,8 +132,10 @@ func (c *Connection) connectAndServe() error {
 			"arch": "amd64",
 		},
 		DeployedRoutes: deployed,
+		LocalVars:      localVars,
 	})
 	slog.Info("Reported deployed routes", "count", len(deployed), "routes", deployed)
+	slog.Info("Reported local vars", "count", len(localVars))
 
 	// Message loop
 	for {
@@ -161,6 +166,14 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 			return
 		}
 		c.handleDeploy(dm)
+
+	case MsgTypeCheckVars:
+		var cv CheckVarsMessage
+		if err := json.Unmarshal(msg.Raw, &cv); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
+		c.handleCheckVars(cv)
 
 	case MsgTypeSuspendRoute, MsgTypeResumeRoute, MsgTypeRouteStatus:
 		var cmd RouteCommandMessage
@@ -263,6 +276,25 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 	}
 
 	c.sendMessage(result)
+}
+
+func (c *Connection) handleCheckVars(msg CheckVarsMessage) {
+	present := make([]string, 0)
+	missing := make([]string, 0)
+	for _, varName := range msg.Vars {
+		if _, ok := c.deployer.HasVar(varName); ok {
+			present = append(present, varName)
+		} else {
+			missing = append(missing, varName)
+		}
+	}
+	c.sendMessage(&VarsResultMessage{
+		Type:      MsgTypeVarsResult,
+		RequestID: msg.RequestID,
+		Present:   present,
+		Missing:   missing,
+	})
+	slog.Info("Check vars", "present", len(present), "missing", len(missing))
 }
 
 func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage) {

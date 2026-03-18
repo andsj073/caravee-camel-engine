@@ -9,6 +9,7 @@ const (
 	MsgTypeSuspendRoute  = "suspend_route"
 	MsgTypeResumeRoute   = "resume_route"
 	MsgTypeRouteStatus   = "route_status"
+	MsgTypeCheckVars     = "check_vars"
 	MsgTypePing          = "ping"
 	MsgTypeTelemetry     = "telemetry"
 	MsgTypeSetLabel      = "set_label"
@@ -19,6 +20,7 @@ const (
 	MsgTypeConnected      = "connected"
 	MsgTypeDeployResult   = "deploy_result"
 	MsgTypeRouteResult    = "route_result"
+	MsgTypeVarsResult     = "vars_result"
 	MsgTypePong           = "pong"
 	MsgTypeHealth         = "telemetry"
 	MsgTypeError          = "error"
@@ -83,6 +85,22 @@ type ConnectedMessage struct {
 	Version        string            `json:"version"`
 	Metadata       map[string]string `json:"metadata"`
 	DeployedRoutes []string          `json:"deployedRoutes"` // Integration IDs currently deployed on disk
+	LocalVars      []string          `json:"localVars"`      // Binding var names available locally (secrets.env + env)
+}
+
+// CheckVarsMessage asks engine to verify a list of var names.
+type CheckVarsMessage struct {
+	Type      string   `json:"type"`
+	RequestID string   `json:"request_id"`
+	Vars      []string `json:"vars"` // {{varName}} refs extracted from integration spec
+}
+
+// VarsResultMessage reports which vars are present/missing.
+type VarsResultMessage struct {
+	Type      string   `json:"type"`
+	RequestID string   `json:"request_id"`
+	Present   []string `json:"present"`
+	Missing   []string `json:"missing"`
 }
 
 // DeployResultMessage reports deploy outcome.

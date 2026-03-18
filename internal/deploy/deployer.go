@@ -139,3 +139,60 @@ func (d *Deployer) resolveSecrets(yaml string, bundleSecrets map[string]string) 
 
 	return buf.String()
 }
+
+// HasVar checks if a var name is available (local secrets > env vars).
+// Returns (value, true) if found, ("", false) if missing.
+func (d *Deployer) HasVar(varName string) (string, bool) {
+	if v, ok := d.secrets.Get(varName); ok {
+		return v, true
+	}
+	if v := os.Getenv(varName); v != "" {
+		return v, true
+	}
+	return "", false
+}
+
+// ListVarNames returns all var names known to this engine (from secrets.env + env).
+func (d *Deployer) ListVarNames() []string {
+	names := d.secrets.ListKeys()
+	// Also include env vars that match UPPER_SNAKE_CASE pattern (likely binding vars)
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 && isBindingVar(parts[0]) {
+			// Only include if not already in secrets
+			found := false
+			for _, n := range names {
+				if n == parts[0] {
+					found = true
+					break
+				}
+			}
+			if !found {
+				names = append(names, parts[0])
+			}
+		}
+	}
+	return names
+}
+
+// isBindingVar returns true if the env var name looks like a user binding var
+// (ALL_CAPS_WITH_UNDERSCORES, not a system var like PATH, HOME, etc.)
+func isBindingVar(name string) bool {
+	if len(name) < 3 {
+		return false
+	}
+	// Exclude common system vars
+	systemPrefixes := []string{"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_", "XDG_", "DBUS_", "SSH_", "DISPLAY", "CARAVEE_", "QUARKUS_", "JAVA_"}
+	for _, p := range systemPrefixes {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	// Must be UPPER_SNAKE_CASE
+	for _, c := range name {
+		if !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
+}

@@ -76,3 +76,14 @@ func (sm *SecretManager) load() {
 	slog.Info("Loaded secrets", "count", len(sm.secrets), "file", secretsFile)
 	sm.loaded = true
 }
+
+// ListKeys returns all secret var names (not values).
+func (sm *SecretManager) ListKeys() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	keys := make([]string, 0, len(sm.secrets))
+	for k := range sm.secrets {
+		keys = append(keys, k)
+	}
+	return keys
+}
