@@ -281,9 +281,15 @@ func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage)
 	}
 
 	if err != nil {
-		result.Status = "error"
-		result.Error = err.Error()
-		slog.Error("Route command failed", "type", msgType, "route", cmd.RouteID, "error", err)
+		if err == camel.ErrNoSidecar {
+			// No Camel sidecar — report desired state so cloud can track it in DB
+			slog.Warn("No Camel sidecar — reporting desired state", "type", msgType, "route", cmd.RouteID)
+			// result.Status already set above; treat as success so cloud updates DB
+		} else {
+			result.Status = "error"
+			result.Error = err.Error()
+			slog.Error("Route command failed", "type", msgType, "route", cmd.RouteID, "error", err)
+		}
 	} else {
 		slog.Info("Route command ok", "type", msgType, "route", cmd.RouteID, "status", result.Status)
 	}

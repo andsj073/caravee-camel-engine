@@ -163,14 +163,24 @@ func (c *Client) RouteStatus(routeID string) (string, error) {
 	return result.Status, nil
 }
 
+// ErrNoSidecar is returned when the Camel sidecar is not reachable.
+var ErrNoSidecar = fmt.Errorf("camel sidecar not available")
+
 func (c *Client) routeCommand(routeID, command string) error {
 	url := fmt.Sprintf("%s/camel/routes/%s/%s", c.baseURL, routeID, command)
 	req, _ := http.NewRequest(http.MethodPost, url, nil)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("camel %s route %s: %w", command, routeID, err)
+		// Connection refused = no Camel sidecar running
+		slog.Warn("Camel sidecar unreachable", "command", command, "route", routeID, "error", err)
+		return ErrNoSidecar
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		// Camel running but route not found — treat as no-op (route may not be loaded yet)
+		slog.Warn("Camel route not found (may not be loaded yet)", "route", routeID, "command", command)
+		return nil
+	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("camel %s route %s: HTTP %d", command, routeID, resp.StatusCode)
 	}
