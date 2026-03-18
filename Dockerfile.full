@@ -1,42 +1,44 @@
-# Caravee Engine — Full image with Camel Quarkus + Observability + Go agent
-#
-# Build: docker build -f Dockerfile.full -t caravee-engine:full .
-#
-# Stage 1: Maven builds the new Camel Quarkus app (with observability-services)
-# Stage 2: Combine with existing caravee-engine:dev (already has JRE + old Camel)
-#          but REPLACE /app/quarkus-app with our new build
-#          and add the Go agent binary
+# Caravee Engine — Full image with Camel Quarkus + Go agent
+# Multi-stage: Maven build + Go build → JRE runtime
 
-# ── Stage 1: Build new Camel runtime with observability ───────────────────
+# ── Stage 1: Build Camel Quarkus runtime ──────────────────────────────────
 FROM maven:3.8.8-eclipse-temurin-21 AS camel-build
 
 WORKDIR /build
 COPY camel-runtime/pom.xml .
-# Cache deps
 RUN mvn dependency:go-offline -q 2>/dev/null || true
-
 COPY camel-runtime/src ./src
 RUN mvn package -DskipTests -q
 
-# ── Stage 2: Final image ──────────────────────────────────────────────────
-# Use existing local image (has JRE 21 + tooling)
-FROM caravee-engine:dev
+# ── Stage 2: Build Go agent ────────────────────────────────────────────────
+FROM golang:1.22 AS agent-build
 
-# Replace old Camel app with our new build (has observability-services)
-RUN rm -rf /app/quarkus-app
-COPY --from=camel-build /build/target/quarkus-app /app/quarkus-app
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o caravee-engine ./cmd/agent/
 
-# Add Go agent (pre-built for linux/amd64)
-COPY caravee-engine /usr/local/bin/caravee-engine
-RUN chmod +x /usr/local/bin/caravee-engine
+# ── Stage 3: Runtime ───────────────────────────────────────────────────────
+FROM eclipse-temurin:21-jre
 
-# New entrypoint that uses agent + correct health path
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Go agent
+COPY --from=agent-build /build/caravee-engine /usr/local/bin/caravee-engine
+
+# Camel Quarkus app
+COPY --from=camel-build /build/target/quarkus-app /opt/camel
+
+# Entrypoint
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Routes directory
 RUN mkdir -p /data/routes
 
-# Override old entrypoint
+VOLUME /data
+EXPOSE 8090
+
 ENTRYPOINT ["/entrypoint.sh"]
-CMD []
