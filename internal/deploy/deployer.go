@@ -96,40 +96,46 @@ func (d *Deployer) ListDeployed() ([]string, error) {
 }
 
 // resolveSecrets substitutes {{ VAR }} placeholders with secret values.
-// Lookup order: local secrets > env vars > bundle secrets
+// Lookup order: local secrets > env vars > bundle secrets.
+// Unresolved placeholders are left as-is.
 func (d *Deployer) resolveSecrets(yaml string, bundleSecrets map[string]string) string {
-	result := yaml
+	var buf strings.Builder
+	remaining := yaml
 
-	// Find all {{ VAR }} patterns
 	for {
-		start := strings.Index(result, "{{")
+		start := strings.Index(remaining, "{{")
 		if start == -1 {
+			buf.WriteString(remaining)
 			break
 		}
-		end := strings.Index(result[start:], "}}")
+
+		end := strings.Index(remaining[start:], "}}")
 		if end == -1 {
+			// Unclosed {{ — write rest as-is
+			buf.WriteString(remaining)
 			break
 		}
 		end += start + 2
 
-		varName := strings.TrimSpace(result[start+2 : end-2])
+		varName := strings.TrimSpace(remaining[start+2 : end-2])
+
+		// Write everything before the placeholder
+		buf.WriteString(remaining[:start])
 
 		// Lookup order: local > env > bundle
-		value := ""
 		if v, ok := d.secrets.Get(varName); ok {
-			value = v
+			buf.WriteString(v)
 		} else if v := os.Getenv(varName); v != "" {
-			value = v
+			buf.WriteString(v)
 		} else if v, ok := bundleSecrets[varName]; ok {
-			value = v
+			buf.WriteString(v)
 		} else {
-			slog.Warn("Secret not found", "var", varName)
-			// Leave placeholder as-is so it's obvious what's missing
-			continue
+			slog.Warn("Secret not found, leaving placeholder", "var", varName)
+			buf.WriteString(remaining[start:end]) // preserve original {{varName}}
 		}
 
-		result = result[:start] + value + result[end:]
+		remaining = remaining[end:]
 	}
 
-	return result
+	return buf.String()
 }
