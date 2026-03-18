@@ -49,6 +49,7 @@ services:
   agent:
     image: ghcr.io/andsj073/caravee-engine:agent   # Caravee agent — open source, auditable
     restart: unless-stopped
+    user: "0"  # run as root so it can write to the volume
     depends_on:
       - postgres  # camel is optional — agent works without sidecar (graceful degradation)
     environment:
