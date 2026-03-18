@@ -1,0 +1,49 @@
+# Caravee Engine — Full image with Camel Quarkus + Go agent
+# Multi-stage: Maven build → Go build → Runtime
+
+# ── Stage 1: Build Camel Quarkus runtime ──────────────────────────────────
+FROM maven:3.9-eclipse-temurin-21 AS camel-build
+
+WORKDIR /build/camel
+COPY camel-runtime/pom.xml .
+# Pre-download dependencies (cache layer)
+RUN mvn dependency:go-offline -q 2>/dev/null || true
+
+COPY camel-runtime/src ./src
+RUN mvn package -DskipTests -q
+
+# ── Stage 2: Build Go agent ────────────────────────────────────────────────
+FROM golang:1.22-alpine AS agent-build
+
+WORKDIR /build/agent
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X main.version=0.2.0" \
+    -o caravee-engine ./cmd/agent
+
+# ── Stage 3: Runtime ───────────────────────────────────────────────────────
+FROM eclipse-temurin:21-jre-alpine
+
+# System tools
+RUN apk add --no-cache curl
+
+# Go agent
+COPY --from=agent-build /build/agent/caravee-engine /usr/local/bin/caravee-engine
+
+# Camel Quarkus runtime (fast-jar layout)
+COPY --from=camel-build /build/camel/target/quarkus-app /opt/camel
+
+# Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Data volume (routes, secrets, agent state)
+VOLUME /data
+
+# Camel HTTP port (internal, not exposed directly — accessed by agent)
+EXPOSE 8090
+
+ENTRYPOINT ["/entrypoint.sh"]
