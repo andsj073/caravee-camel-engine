@@ -1,108 +1,73 @@
-# Caravee Engine
+# caravee-camel-agent
 
-A lightweight agent that turns any Apache Camel runtime into a managed engine in the [Caravee](https://caravee.io) integration platform.
+The Caravee engine agent — a lightweight Go binary that bridges your Camel runtime with the Caravee cloud.
 
-## Quick Start
+## What this does
 
-```bash
-docker run -d \
-  -e CARAVEE_CLOUD=https://api.caravee.io/pair?tenant=abc&otp=x7k9m2 \
-  -v caravee-data:/data \
-  ghcr.io/caravee/engine:latest
-```
+- **Pairs** with the Caravee cloud via a one-time token (OTP)
+- **Deploys** integration YAML files to the Camel sidecar's routes directory
+- **Monitors** Camel metrics and pushes error events to cloud
+- **Executes** route commands (suspend/resume) via the Camel management API
 
-That's it. Your Camel runtime is now managed by Caravee Cloud.
+## What this does NOT do
 
-## What It Does
-
-The Caravee Engine agent is a small Go binary that runs alongside Apache Camel. It:
-
-- **Connects** to Caravee Cloud via secure WebSocket
-- **Deploys** integration routes by writing Camel YAML files (Camel's file watcher hot-reloads them)
-- **Undeploys** by removing route files
-- **Reports health** by polling Camel's MicroProfile Health endpoints
-- **Manages secrets** — decrypts cloud-provided secrets with the engine's RSA private key
-
-The agent is **headless** — no UI, no HTTP endpoints for humans. All management happens through Caravee Cloud.
-
-## How It Works
-
-```
-Caravee Cloud ◄──WSS──► Caravee Agent ──file──► Apache Camel
-                              │                      │
-                              ▼                      ▼
-                         /data/routes/         Route execution
-                         /data/secrets.env     Hot-reload
-```
-
-1. Agent connects to cloud via WebSocket
-2. Cloud sends deploy commands with route definitions
-3. Agent writes YAML files to `/data/routes/`
-4. Camel's file watcher detects changes and hot-reloads routes
-5. Agent polls `/q/health` to verify routes are running
-6. Agent reports status back to cloud
-
-## Configuration
-
-| Environment Variable | Required | Default | Description |
-|---------------------|----------|---------|-------------|
-| `CARAVEE_CLOUD` | Yes (first boot) | — | Pairing URL from Caravee Cloud |
-| `CARAVEE_ROUTES_DIR` | No | `/data/routes` | Route YAML output directory |
-| `CARAVEE_DATA_DIR` | No | `/data` | Base data directory |
-| `CARAVEE_HEALTH_URL` | No | `http://localhost:8080/q/health` | Camel health endpoint |
-| `CARAVEE_LOG_LEVEL` | No | `info` | Log level (debug/info/warn/error) |
-
-## Local Secrets
-
-Mount a secrets file for credentials that should never leave the engine:
-
-```bash
-docker run -d \
-  -e CARAVEE_CLOUD=https://... \
-  -v caravee-data:/data \
-  -v ./secrets.env:/data/secrets.env:ro \
-  ghcr.io/caravee/engine:latest
-```
-
-```env
-# secrets.env
-SALESFORCE_CLIENT_ID=abc123
-SALESFORCE_CLIENT_SECRET=s3cr3t
-```
-
-Local secrets take priority over cloud-provided encrypted secrets.
+No integration logic. No data processing. No business code.  
+~2000 lines of Go — audit it yourself in an evening.
 
 ## Architecture
 
-The agent is designed to work with **any** Apache Camel distribution that supports:
-- File-based route loading (YAML)
-- MicroProfile Health endpoints (`/q/health`)
-
-Default: Camel Quarkus. But Camel Spring Boot, Camel K, or standalone Camel work too.
-
-## Building
-
-```bash
-# Build the agent
-go build -o caravee-agent ./cmd/agent
-
-# Build the Docker image
-docker build -t caravee-engine:latest .
-
-# Run tests
-go test ./...
+```
+┌─────────────────────────────────────────┐
+│  Your host / container                  │
+│                                         │
+│  ┌──────────────────────────────┐       │
+│  │  caravee-camel-runtime       │ :8090 │  ← Apache Foundation image
+│  │  (Camel Quarkus)             │       │
+│  └──────────────────────────────┘       │
+│            ↕ localhost                  │
+│  ┌──────────────────────────────┐       │
+│  │  caravee-camel-agent (this)  │       │  ← Our code, open source
+│  │  (Go binary)                 │       │
+│  └──────────────────────────────┘       │
+│            ↕ WSS                        │
+└─────────────────────────────────────────┘
+             ↕
+    Caravee Cloud (backend)
 ```
 
-## Documentation
+## Quick start
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Secrets Management](docs/SECRETS.md)
-- [Development Guide](docs/DEVELOPMENT.md)
-- [WSS Protocol](docs/PROTOCOL.md)
+```bash
+# Generate OTP in Caravee UI (Connect Engine button)
+$env:CARAVEE_CLOUD='http://your-cloud/api/v1/pairing/pair?otp=XXXX-XXXX-XXXX'
+docker compose up -d
+```
 
-## License
+This starts:
+1. `postgres:16-alpine` — local database for JDBC sinks
+2. `caravee-camel-runtime:latest` — Apache Camel Quarkus runtime
+3. `caravee-camel-agent:latest` — this agent
 
-Business Source License 1.1 — converts to Apache License 2.0 on 2029-03-16.
+## Images
 
-See [LICENSE](LICENSE) for details.
+| Image | Source | Trust |
+|-------|--------|-------|
+| `ghcr.io/andsj073/caravee-camel-runtime:latest` | [caravee-camel-runtime](https://github.com/andsj073/caravee-camel-runtime) | Apache artifacts from Maven Central |
+| `ghcr.io/andsj073/caravee-camel-agent:agent` | This repo | ~2000 lines Go, open source |
+
+## Configuration
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `CARAVEE_CLOUD` | — | Pairing URL with OTP (required on first start) |
+| `CARAVEE_CAMEL_URL` | `http://localhost:8090` | Camel sidecar base URL |
+| `CARAVEE_DATA_DIR` | `/data` | Agent data directory |
+| `CARAVEE_ROUTES_DIR` | `/data/routes` | Route YAML hot-reload directory |
+| `CARAVEE_LOG_LEVEL` | `info` | Log level (debug/info/warn/error) |
+
+## Related repos
+
+| Repo | Description |
+|------|-------------|
+| [caravee-camel-runtime](https://github.com/andsj073/caravee-camel-runtime) | Apache Camel Quarkus runtime (no Caravee code) |
+| [caravee](https://github.com/andsj073/caravee) | Cloud backend + frontend |
