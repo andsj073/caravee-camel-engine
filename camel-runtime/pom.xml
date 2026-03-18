@@ -47,10 +47,22 @@
       <artifactId>camel-quarkus-kamelet</artifactId>
     </dependency>
 
-    <!-- Observability: /observe/metrics + /observe/health -->
+    <!-- Observability: health checks (MicroProfile Health) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-smallrye-health</artifactId>
+    </dependency>
+
+    <!-- Observability: Prometheus metrics (Micrometer) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
+    </dependency>
+
+    <!-- Camel Micrometer metrics (route-level: exchanges, duration etc.) -->
     <dependency>
       <groupId>org.apache.camel.quarkus</groupId>
-      <artifactId>camel-quarkus-observability-services</artifactId>
+      <artifactId>camel-quarkus-micrometer</artifactId>
     </dependency>
 
     <!-- HTTP source/sink (platform-http webhook + http4 client) -->
