@@ -25,24 +25,44 @@ services:
       timeout: 3s
       retries: 10
 
-  engine:
-    image: ghcr.io/andsj073/caravee-engine:latest   # Camel Quarkus + Go agent, built by CI
+  camel:
+    image: ghcr.io/andsj073/caravee-camel-runtime:latest  # Apache Camel Quarkus — no Caravee code
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      CARAVEE_CLOUD: ${CARAVEE_CLOUD}
-      CARAVEE_LOG_LEVEL: ${CARAVEE_LOG_LEVEL:-info}
-      CARAVEE_CAMEL_URL: http://localhost:8090
-      CARAVEE_DATA_DIR: /data
-      CARAVEE_ROUTES_DIR: /data/routes
       QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/caravee
       QUARKUS_DATASOURCE_USERNAME: caravee
       QUARKUS_DATASOURCE_PASSWORD: caravee
     volumes:
       - engine-data:/data
-    network_mode: host
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/observe/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  agent:
+    image: ghcr.io/andsj073/caravee-engine:agent   # Caravee agent — open source, auditable
+    restart: unless-stopped
+    depends_on:
+      camel:
+        condition: service_healthy
+    environment:
+      CARAVEE_CLOUD: ${CARAVEE_CLOUD}
+      CARAVEE_CAMEL_URL: http://camel:8090
+      CARAVEE_DATA_DIR: /data
+      CARAVEE_ROUTES_DIR: /data/routes
+      CARAVEE_LOG_LEVEL: ${CARAVEE_LOG_LEVEL:-info}
+    volumes:
+      - engine-data:/data
+    command:
+      - -data-dir=/data
+      - -routes-dir=/data/routes
+      - -camel-url=http://camel:8090
 
 volumes:
   postgres-data:
