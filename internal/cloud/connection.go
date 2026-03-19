@@ -127,7 +127,12 @@ func (c *Connection) connectAndServe() error {
 	}
 
 	// Collect local var names (secrets.env keys + env vars that look like binding vars)
-	localVars := c.deployer.ListVarNames()
+	// Collect local vars with source info
+	rawLocalVars := c.deployer.ListLocalVars()
+	localVars := make([]LocalVar, len(rawLocalVars))
+	for i, v := range rawLocalVars {
+		localVars[i] = LocalVar{Name: v.Name, Source: v.Source}
+	}
 
 	c.sendMessage(&ConnectedMessage{
 		Type:     MsgTypeConnected,

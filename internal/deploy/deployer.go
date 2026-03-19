@@ -176,6 +176,16 @@ func (d *Deployer) resolveSecrets(yaml string, bundleSecrets map[string]string) 
 
 // HasVar checks if a var name is available (local secrets > env vars).
 // Returns (value, true) if found, ("", false) if missing.
+// ListVarNames returns just names for backward compat.
+func (d *Deployer) ListVarNames() []string {
+	vars := d.ListLocalVars()
+	names := make([]string, len(vars))
+	for i, v := range vars {
+		names[i] = v.Name
+	}
+	return names
+}
+
 func (d *Deployer) HasVar(varName string) (string, bool) {
 	if v, ok := d.secrets.Get(varName); ok {
 		return v, true
@@ -187,26 +197,33 @@ func (d *Deployer) HasVar(varName string) (string, bool) {
 }
 
 // ListVarNames returns all var names known to this engine (from secrets.env + env).
-func (d *Deployer) ListVarNames() []string {
-	names := d.secrets.ListKeys()
-	// Also include env vars that match UPPER_SNAKE_CASE pattern (likely binding vars)
+// LocalVar describes a var available on the engine with its source.
+type LocalVar struct {
+	Name   string
+	Source string // "secrets.env" or "env"
+}
+
+// ListLocalVars returns all vars available on this engine with source info.
+func (d *Deployer) ListLocalVars() []LocalVar {
+	var result []LocalVar
+
+	// secrets.env vars (highest priority)
+	for _, name := range d.secrets.ListKeys() {
+		result = append(result, LocalVar{Name: name, Source: "secrets.env"})
+	}
+
+	// OS env vars (only UPPER_SNAKE_CASE that aren't already in secrets)
+	secretNames := make(map[string]bool)
+	for _, lv := range result {
+		secretNames[lv.Name] = true
+	}
 	for _, e := range os.Environ() {
 		parts := strings.SplitN(e, "=", 2)
-		if len(parts) == 2 && isBindingVar(parts[0]) {
-			// Only include if not already in secrets
-			found := false
-			for _, n := range names {
-				if n == parts[0] {
-					found = true
-					break
-				}
-			}
-			if !found {
-				names = append(names, parts[0])
-			}
+		if len(parts) == 2 && isBindingVar(parts[0]) && !secretNames[parts[0]] {
+			result = append(result, LocalVar{Name: parts[0], Source: "env"})
 		}
 	}
-	return names
+	return result
 }
 
 // isBindingVar returns true if the env var name looks like a user binding var

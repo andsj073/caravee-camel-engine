@@ -89,8 +89,14 @@ type ConnectedMessage struct {
 	EngineID       string            `json:"engineId"`
 	Version        string            `json:"version"`
 	Metadata       map[string]string `json:"metadata"`
-	DeployedRoutes []string          `json:"deployedRoutes"` // Integration IDs currently deployed on disk
-	LocalVars      []string          `json:"localVars"`      // Binding var names available locally (secrets.env + env)
+	DeployedRoutes []string   `json:"deployedRoutes"` // Integration IDs currently deployed on disk
+	LocalVars      []LocalVar `json:"localVars"`      // Vars available locally with source info
+}
+
+// LocalVar describes a var available on the engine.
+type LocalVar struct {
+	Name   string `json:"name"`
+	Source string `json:"source"` // "secrets.env" or "env"
 }
 
 // CheckVarsMessage asks engine to verify a list of var names.
