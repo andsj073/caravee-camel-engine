@@ -37,6 +37,7 @@ services:
       QUARKUS_DATASOURCE_PASSWORD: caravee
     volumes:
       - engine-data:/data
+      - ${CARAVEE_DATA_PATH:-./data}:/mnt/caravee   # mount host dirs here, e.g. /mnt/caravee/orders
     ports:
       - "8090:8090"
     healthcheck:
