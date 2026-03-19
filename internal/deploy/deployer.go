@@ -11,36 +11,70 @@ import (
 // Deployer writes and removes route YAML files in the routes directory.
 // Camel's file watcher picks up changes automatically.
 type Deployer struct {
-	routesDir string
-	secrets   *SecretManager
+	routesDir  string
+	kameletDir string // /data/kamelets — Kamelet definitions (name.kamelet.yaml)
+	secrets    *SecretManager
 }
 
 // NewDeployer creates a deployer targeting the given routes directory.
 func NewDeployer(routesDir string, secrets *SecretManager) *Deployer {
+	// Kamelet dir is sibling of routes dir: /data/routes → /data/kamelets
+	kameletDir := filepath.Join(filepath.Dir(routesDir), "kamelets")
 	return &Deployer{
-		routesDir: routesDir,
-		secrets:   secrets,
+		routesDir:  routesDir,
+		kameletDir: kameletDir,
+		secrets:    secrets,
 	}
 }
 
-// Deploy writes a route YAML file after substituting secrets.
+// isKamelet returns true if the YAML looks like a Kamelet definition.
+func isKamelet(camelYAML string) bool {
+	return strings.Contains(camelYAML, "kind: Kamelet")
+}
+
+// kameletName extracts metadata.name from a Kamelet YAML.
+func kameletName(camelYAML string) string {
+	for _, line := range strings.Split(camelYAML, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		}
+	}
+	return ""
+}
+
+// Deploy writes a YAML file — Kamelets go to /data/kamelets/, routes to /data/routes/.
 func (d *Deployer) Deploy(routeID, camelYAML string, bundleSecrets map[string]string) error {
+	resolved := d.resolveSecrets(camelYAML, bundleSecrets)
+
+	if isKamelet(resolved) {
+		// Kamelet: write to /data/kamelets/name.kamelet.yaml
+		if err := os.MkdirAll(d.kameletDir, 0755); err != nil {
+			return fmt.Errorf("create kamelets dir: %w", err)
+		}
+		name := kameletName(resolved)
+		if name == "" {
+			name = strings.ReplaceAll(routeID, ".", "-")
+		}
+		filename := name + ".kamelet.yaml"
+		filePath := filepath.Join(d.kameletDir, filename)
+		if err := os.WriteFile(filePath, []byte(resolved), 0644); err != nil {
+			return fmt.Errorf("write kamelet file %s: %w", filename, err)
+		}
+		slog.Info("Kamelet deployed", "name", name, "file", filePath)
+		return nil
+	}
+
+	// Integration route: write to /data/routes/
 	if err := os.MkdirAll(d.routesDir, 0755); err != nil {
 		return fmt.Errorf("create routes dir: %w", err)
 	}
-
-	// Substitute secrets: {{ VAR }} → value
-	resolved := d.resolveSecrets(camelYAML, bundleSecrets)
-
-	// Write file — replace dots with dashes (Camel treats dots as extension separators)
 	safeID := strings.ReplaceAll(routeID, ".", "-")
 	filename := safeID + ".yaml"
 	filePath := filepath.Join(d.routesDir, filename)
-
 	if err := os.WriteFile(filePath, []byte(resolved), 0644); err != nil {
 		return fmt.Errorf("write route file %s: %w", filename, err)
 	}
-
 	slog.Info("Route deployed", "route_id", routeID, "file", filePath)
 	return nil
 }
