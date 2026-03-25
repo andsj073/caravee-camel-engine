@@ -2,6 +2,7 @@
 package monitor
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -10,42 +11,47 @@ import (
 )
 
 const (
-	PollInterval   = 30 * time.Second
-	FailureMetric  = "camel_exchanges_failed_total"
-	InFlightMetric = "camel_exchanges_inflight"
+	PollInterval         = 30 * time.Second
+	FailureMetric        = "camel_exchanges_failed_total"
+	InFlightMetric       = "camel_exchanges_inflight"
+	ExchangesTotalMetric = "camel_exchanges_total"
 )
 
 // RouteErrorEvent is sent to cloud when failures increase.
 type RouteErrorEvent struct {
-	IntegrationID    string  `json:"integration_id"`
-	FailureDelta     float64 `json:"failure_delta"`      // new failures since last check
-	TotalFailures    float64 `json:"total_failures"`
-	InFlight         float64 `json:"inflight"`
-	Timestamp        string  `json:"timestamp"`
+	IntegrationID string  `json:"integration_id"`
+	FailureDelta  float64 `json:"failure_delta"` // new failures since last check
+	TotalFailures float64 `json:"total_failures"`
+	InFlight      float64 `json:"inflight"`
+	Timestamp     string  `json:"timestamp"`
 }
 
 // Sender is implemented by cloud.Connection.
 type Sender interface {
 	SendRouteError(evt RouteErrorEvent)
 	ListDeployedRoutes() []string
+	UpdateRunStats(integrationID string, totalExchanges int64)
+	RecordRunFailure(integrationID string, errorSummary string)
 }
 
 // Monitor polls Camel metrics and emits error events.
 type Monitor struct {
-	camel    *camel.Client
-	sender   Sender
-	baseline map[string]float64 // last known failure count per route
-	mu       sync.Mutex
-	stop     chan struct{}
+	camel             *camel.Client
+	sender            Sender
+	baseline          map[string]float64 // last known failure count per route
+	exchangesBaseline map[string]float64 // last known total exchanges per route
+	mu                sync.Mutex
+	stop              chan struct{}
 }
 
 // New creates a monitor.
 func New(c *camel.Client, s Sender) *Monitor {
 	return &Monitor{
-		camel:    c,
-		sender:   s,
-		baseline: map[string]float64{},
-		stop:     make(chan struct{}),
+		camel:             c,
+		sender:            s,
+		baseline:          map[string]float64{},
+		exchangesBaseline: map[string]float64{},
+		stop:              make(chan struct{}),
 	}
 }
 
@@ -89,32 +95,46 @@ func (m *Monitor) check() {
 			continue // Camel not running or route not loaded yet
 		}
 
-		total := metrics[FailureMetric]
+		failures := metrics[FailureMetric]
 		inflight := metrics[InFlightMetric]
+		totalExchanges := metrics[ExchangesTotalMetric]
 
 		m.mu.Lock()
-		prev := m.baseline[routeID]
-		delta := total - prev
-		if delta > 0 {
-			m.baseline[routeID] = total
-		} else if prev == 0 {
-			m.baseline[routeID] = total // initialize baseline
+		prevFailures := m.baseline[routeID]
+		failureDelta := failures - prevFailures
+		if failureDelta > 0 {
+			m.baseline[routeID] = failures
+		} else if prevFailures == 0 {
+			m.baseline[routeID] = failures // initialize baseline
+		}
+
+		prevExchanges := m.exchangesBaseline[routeID]
+		exchangeDelta := totalExchanges - prevExchanges
+		if exchangeDelta > 0 {
+			m.exchangesBaseline[routeID] = totalExchanges
+		} else if prevExchanges == 0 {
+			m.exchangesBaseline[routeID] = totalExchanges
 		}
 		m.mu.Unlock()
 
-		if delta > 0 {
+		if failureDelta > 0 {
 			slog.Warn("Route failures detected",
 				"route", routeID,
-				"new_failures", delta,
-				"total", total,
+				"new_failures", failureDelta,
+				"total", failures,
 			)
 			m.sender.SendRouteError(RouteErrorEvent{
 				IntegrationID: routeID,
-				FailureDelta:  delta,
-				TotalFailures: total,
+				FailureDelta:  failureDelta,
+				TotalFailures: failures,
 				InFlight:      inflight,
 				Timestamp:     time.Now().UTC().Format(time.RFC3339),
 			})
+			m.sender.RecordRunFailure(routeID, fmt.Sprintf("%.0f new exchange failure(s), total: %.0f", failureDelta, failures))
+		}
+
+		if exchangeDelta > 0 {
+			m.sender.UpdateRunStats(routeID, int64(totalExchanges))
 		}
 	}
 }

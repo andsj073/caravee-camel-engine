@@ -1,6 +1,10 @@
 package cloud
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/caravee/engine/internal/runlog"
+)
 
 // Message types from cloud → agent
 const (
@@ -215,4 +219,37 @@ type RouteErrorMessage struct {
 	TotalFailures float64 `json:"total_failures"`
 	InFlight      float64 `json:"inflight"`
 	Timestamp     string  `json:"timestamp"`
+}
+
+// Run history message types
+const (
+	MsgTypeGetRunHistory = "get_run_history"
+	MsgTypeRunHistory    = "run_history"
+	MsgTypeRunEvent      = "run_event"
+)
+
+// GetRunHistoryMessage is sent by cloud to request run history for an integration.
+type GetRunHistoryMessage struct {
+	Type          string `json:"type"`
+	RequestID     string `json:"request_id"`
+	IntegrationID string `json:"integration_id"`
+	Status        string `json:"status,omitempty"`  // filter: running/completed/failed
+	Limit         int    `json:"limit,omitempty"`   // default 50
+	Offset        int    `json:"offset,omitempty"`  // for pagination
+}
+
+// RunHistoryMessage is the agent's response with paginated run records.
+type RunHistoryMessage struct {
+	Type          string       `json:"type"`
+	RequestID     string       `json:"request_id"`
+	IntegrationID string       `json:"integration_id"`
+	Runs          []runlog.Run `json:"runs"`
+	Total         int          `json:"total"`
+	Offset        int          `json:"offset"`
+}
+
+// RunEventMessage is pushed by the agent when a run completes or fails.
+type RunEventMessage struct {
+	Type string      `json:"type"`
+	Run  runlog.Run  `json:"run"`
 }

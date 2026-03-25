@@ -15,6 +15,7 @@ import (
 	"github.com/caravee/engine/internal/deploy"
 	"github.com/caravee/engine/internal/monitor"
 	"github.com/caravee/engine/internal/pairing"
+	"github.com/caravee/engine/internal/runlog"
 	"github.com/caravee/engine/internal/system"
 	"github.com/gorilla/websocket"
 )
@@ -25,17 +26,30 @@ const (
 	writeTimeout      = 10 * time.Second
 )
 
+// runState tracks an in-progress or recently completed run in memory.
+type runState struct {
+	runID     string
+	startedAt time.Time
+	revision  int
+	exchanges int64
+}
+
 // Connection manages the WSS link to Caravee Cloud.
 type Connection struct {
 	cfg      *config.CloudConfig
 	identity *config.Identity
 	deployer *deploy.Deployer
-	camel   *camel.Client
+	camel    *camel.Client
 	privKey  *rsa.PrivateKey // For decrypting secrets
 	ws       *websocket.Conn
 	mu       sync.Mutex
 	done     chan struct{}
 	startAt  time.Time
+
+	runStoreOnce sync.Once
+	runStoreInst *runlog.Store
+	runsMu       sync.Mutex
+	currentRuns  map[string]*runState // integrationID → active run
 }
 
 // NewConnection creates a new cloud connection.
@@ -48,13 +62,14 @@ func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer 
 	}
 
 	return &Connection{
-		cfg:      cfg,
-		identity: identity,
-		deployer: deployer,
-		camel:   camelClient,
-		privKey:  privKey,
-		done:     make(chan struct{}),
-		startAt:  time.Now(),
+		cfg:         cfg,
+		identity:    identity,
+		deployer:    deployer,
+		camel:       camelClient,
+		privKey:     privKey,
+		done:        make(chan struct{}),
+		startAt:     time.Now(),
+		currentRuns: map[string]*runState{},
 	}
 }
 
@@ -126,7 +141,6 @@ func (c *Connection) connectAndServe() error {
 		deployed = []string{}
 	}
 
-	// Collect local var names (secrets.env keys + env vars that look like binding vars)
 	// Collect local vars with source info
 	rawLocalVars := c.deployer.ListLocalVars()
 	localVars := make([]LocalVar, len(rawLocalVars))
@@ -230,6 +244,14 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 			slog.Info("Label updated", "label", label)
 		}
 
+	case MsgTypeGetRunHistory:
+		var req GetRunHistoryMessage
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
+		go c.handleGetRunHistory(req)
+
 	default:
 		slog.Warn("Unknown message type", "type", msg.Type)
 	}
@@ -281,6 +303,32 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 	} else {
 		result.Status = "success"
 
+		// Start a run record for this deployment
+		runID := runlog.GenerateRunID()
+		startedAt := time.Now()
+		c.runsMu.Lock()
+		c.currentRuns[dm.IntegrationID] = &runState{
+			runID:     runID,
+			startedAt: startedAt,
+			revision:  dm.Revision,
+		}
+		c.runsMu.Unlock()
+
+		if c.getRunStore() != nil {
+			run := runlog.Run{
+				RunID:         runID,
+				IntegrationID: dm.IntegrationID,
+				EngineID:      c.identity.EngineID,
+				Revision:      dm.Revision,
+				StartedAt:     startedAt.UTC().Format(time.RFC3339),
+			}
+			if err := c.getRunStore().StartRun(run); err != nil {
+				slog.Warn("Failed to record run start", "error", err)
+			} else {
+				slog.Info("Run started", "run_id", runID, "integration_id", dm.IntegrationID)
+			}
+		}
+
 		// Wait for Camel to pick up routes, then verify health
 		go func() {
 			time.Sleep(3 * time.Second)
@@ -318,6 +366,48 @@ func (c *Connection) ListDeployedRoutes() []string {
 	return routes
 }
 
+// UpdateRunStats satisfies monitor.Sender — updates message count for the active run.
+func (c *Connection) UpdateRunStats(integrationID string, totalExchanges int64) {
+	c.runsMu.Lock()
+	rs, ok := c.currentRuns[integrationID]
+	if ok {
+		rs.exchanges = totalExchanges
+	}
+	c.runsMu.Unlock()
+
+	if !ok || c.getRunStore() == nil {
+		return
+	}
+	if err := c.getRunStore().UpdateStats(rs.runID, totalExchanges); err != nil {
+		slog.Warn("Failed to update run stats", "error", err)
+	}
+}
+
+// RecordRunFailure satisfies monitor.Sender — marks the active run as failed.
+func (c *Connection) RecordRunFailure(integrationID string, errorSummary string) {
+	c.runsMu.Lock()
+	rs, ok := c.currentRuns[integrationID]
+	if ok {
+		delete(c.currentRuns, integrationID)
+	}
+	c.runsMu.Unlock()
+
+	if !ok || c.getRunStore() == nil {
+		return
+	}
+	if err := c.getRunStore().FailRun(rs.runID, errorSummary, ""); err != nil {
+		slog.Warn("Failed to record run failure", "error", err)
+		return
+	}
+	slog.Info("Run failed", "run_id", rs.runID, "integration_id", integrationID)
+
+	// Push run event to cloud
+	runs, _, err := c.getRunStore().QueryRuns(integrationID, runlog.StatusFailed, 1, 0)
+	if err == nil && len(runs) > 0 {
+		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
+	}
+}
+
 func (c *Connection) handleGetEngineMetrics(req GetEngineMetricsMessage) {
 	m, err := c.camel.GetEngineMetrics()
 	result := &EngineMetrics{
@@ -343,18 +433,20 @@ func (c *Connection) handleGetRouteMetrics(req GetRouteMetricsMessage) {
 		Available: err == nil,
 	}
 	if err == nil {
-		result.ExchangesTotal   = m["camel_exchanges_total"]
-		result.ExchangesFailed  = m["camel_exchanges_failed_total"]
+		result.ExchangesTotal    = m["camel_exchanges_total"]
+		result.ExchangesFailed   = m["camel_exchanges_failed_total"]
 		result.ExchangesInflight = m["camel_exchanges_inflight"]
-		result.MeanDurationMs   = m["camel_exchange_duration_milliseconds_sum"] /
+		result.MeanDurationMs    = m["camel_exchange_duration_milliseconds_sum"] /
 			max(m["camel_exchange_duration_milliseconds_count"], 1)
-		result.MaxDurationMs    = m["camel_exchange_duration_milliseconds_max"]
+		result.MaxDurationMs = m["camel_exchange_duration_milliseconds_max"]
 	}
 	c.sendMessage(result)
 }
 
 func max(a, b float64) float64 {
-	if a > b { return a }
+	if a > b {
+		return a
+	}
 	return b
 }
 
@@ -420,6 +512,9 @@ func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage)
 func (c *Connection) handleUndeploy(um UndeployMessage) {
 	slog.Info("Undeploying integration", "integration_id", um.IntegrationID)
 
+	// Complete the active run before undeploying
+	c.completeCurrentRun(um.IntegrationID)
+
 	if err := c.deployer.Undeploy(um.IntegrationID); err != nil {
 		c.sendError(um.RequestID, "UNDEPLOY_FAILED", err.Error())
 		return
@@ -430,6 +525,73 @@ func (c *Connection) handleUndeploy(um UndeployMessage) {
 		RequestID:     um.RequestID,
 		IntegrationID: um.IntegrationID,
 		Status:        "success",
+	})
+}
+
+// completeCurrentRun completes the active run for an integration (called on undeploy).
+func (c *Connection) completeCurrentRun(integrationID string) {
+	c.runsMu.Lock()
+	rs, ok := c.currentRuns[integrationID]
+	if ok {
+		delete(c.currentRuns, integrationID)
+	}
+	c.runsMu.Unlock()
+
+	if !ok || c.getRunStore() == nil {
+		return
+	}
+	durationMs := time.Since(rs.startedAt).Milliseconds()
+	if err := c.getRunStore().CompleteRun(rs.runID, rs.exchanges, durationMs); err != nil {
+		slog.Warn("Failed to complete run", "error", err)
+		return
+	}
+	slog.Info("Run completed", "run_id", rs.runID, "integration_id", integrationID, "duration_ms", durationMs)
+
+	// Push run event to cloud
+	runs, _, err := c.getRunStore().QueryRuns(integrationID, runlog.StatusCompleted, 1, 0)
+	if err == nil && len(runs) > 0 {
+		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
+	}
+}
+
+// getRunStore lazily initializes the run store on first use.
+// This avoids failures at startup when the /data PVC may not be ready yet.
+func (c *Connection) getRunStore() *runlog.Store {
+	c.runStoreOnce.Do(func() {
+		rs, err := runlog.NewStore(c.identity.DataDir)
+		if err != nil {
+			slog.Warn("Failed to init run store", "error", err)
+			return
+		}
+		c.runStoreInst = rs
+	})
+	return c.runStoreInst
+}
+
+func (c *Connection) handleGetRunHistory(req GetRunHistoryMessage) {
+	if c.getRunStore() == nil {
+		c.sendError(req.RequestID, "RUN_STORE_UNAVAILABLE", "run history store is not initialized")
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	runs, total, err := c.getRunStore().QueryRuns(req.IntegrationID, req.Status, limit, req.Offset)
+	if err != nil {
+		c.sendError(req.RequestID, "QUERY_FAILED", err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []runlog.Run{}
+	}
+	c.sendMessage(&RunHistoryMessage{
+		Type:          MsgTypeRunHistory,
+		RequestID:     req.RequestID,
+		IntegrationID: req.IntegrationID,
+		Runs:          runs,
+		Total:         total,
+		Offset:        req.Offset,
 	})
 }
 
