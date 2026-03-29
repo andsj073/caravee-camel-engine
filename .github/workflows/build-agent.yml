@@ -43,6 +43,8 @@ jobs:
           context: .
           file: Dockerfile.agent
           push: true
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/caravee-engine:agent
             ghcr.io/${{ github.repository_owner }}/caravee-engine:agent-${{ github.sha }}
