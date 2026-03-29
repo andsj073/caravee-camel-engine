@@ -44,7 +44,7 @@ func main() {
 	deployer     := deploy.NewDeployer(*routesDir, secretMgr)
 	camelClient  := camel.New(*camelURL)
 
-	conn := cloud.NewConnection(cfg, identity, deployer, camelClient)
+	conn := cloud.NewConnection(cfg, identity, deployer, camelClient, version)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

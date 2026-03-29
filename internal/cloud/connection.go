@@ -36,15 +36,16 @@ type runState struct {
 
 // Connection manages the WSS link to Caravee Cloud.
 type Connection struct {
-	cfg      *config.CloudConfig
-	identity *config.Identity
-	deployer *deploy.Deployer
-	camel    *camel.Client
-	privKey  *rsa.PrivateKey // For decrypting secrets
-	ws       *websocket.Conn
-	mu       sync.Mutex
-	done     chan struct{}
-	startAt  time.Time
+	cfg          *config.CloudConfig
+	identity     *config.Identity
+	deployer     *deploy.Deployer
+	camel        *camel.Client
+	privKey      *rsa.PrivateKey // For decrypting secrets
+	ws           *websocket.Conn
+	mu           sync.Mutex
+	done         chan struct{}
+	startAt      time.Time
+	agentVersion string
 
 	runStoreOnce sync.Once
 	runStoreInst *runlog.Store
@@ -53,7 +54,7 @@ type Connection struct {
 }
 
 // NewConnection creates a new cloud connection.
-func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer *deploy.Deployer, camelClient *camel.Client) *Connection {
+func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer *deploy.Deployer, camelClient *camel.Client, agentVersion ...string) *Connection {
 	// Load private key for secret decryption
 	privKey, err := pairing.LoadPrivateKey(identity.DataDir)
 	if err != nil {
@@ -61,15 +62,20 @@ func NewConnection(cfg *config.CloudConfig, identity *config.Identity, deployer 
 		privKey = nil
 	}
 
+	ver := "dev"
+	if len(agentVersion) > 0 && agentVersion[0] != "" {
+		ver = agentVersion[0]
+	}
 	return &Connection{
-		cfg:         cfg,
-		identity:    identity,
-		deployer:    deployer,
-		camel:       camelClient,
-		privKey:     privKey,
-		done:        make(chan struct{}),
-		startAt:     time.Now(),
-		currentRuns: map[string]*runState{},
+		cfg:          cfg,
+		identity:     identity,
+		deployer:     deployer,
+		camel:        camelClient,
+		privKey:      privKey,
+		done:         make(chan struct{}),
+		startAt:      time.Now(),
+		currentRuns:  map[string]*runState{},
+		agentVersion: ver,
 	}
 }
 
@@ -151,7 +157,7 @@ func (c *Connection) connectAndServe() error {
 	c.sendMessage(&ConnectedMessage{
 		Type:     MsgTypeConnected,
 		EngineID: c.identity.EngineID,
-		Version:  "0.1.0",
+		Version:  c.agentVersion,
 		Metadata: map[string]string{
 			"os":   "linux",
 			"arch": "amd64",
