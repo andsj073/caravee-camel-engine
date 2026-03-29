@@ -32,6 +32,7 @@ type Sender interface {
 	ListDeployedRoutes() []string
 	UpdateRunStats(integrationID string, totalExchanges int64)
 	RecordRunFailure(integrationID string, errorSummary string)
+	RecordExchangeBatch(integrationID string, count int64, failures int64)
 }
 
 // Monitor polls Camel metrics and emits error events.
@@ -134,7 +135,11 @@ func (m *Monitor) check() {
 		}
 
 		if exchangeDelta > 0 {
-			m.sender.UpdateRunStats(routeID, int64(totalExchanges))
+			var failures int64
+			if failureDelta > 0 {
+				failures = int64(failureDelta)
+			}
+			m.sender.RecordExchangeBatch(routeID, int64(exchangeDelta), failures)
 		}
 	}
 }

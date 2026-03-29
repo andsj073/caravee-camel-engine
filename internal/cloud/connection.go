@@ -383,6 +383,55 @@ func (c *Connection) UpdateRunStats(integrationID string, totalExchanges int64) 
 	}
 }
 
+// RecordExchangeBatch satisfies monitor.Sender — records a completed run for each polling batch with new exchanges.
+func (c *Connection) RecordExchangeBatch(integrationID string, count int64, failures int64) {
+	store := c.getRunStore()
+	if store == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	runID := runlog.GenerateRunID()
+	status := runlog.StatusCompleted
+	if failures > 0 {
+		status = runlog.StatusFailed
+	}
+
+	run := runlog.Run{
+		RunID:         runID,
+		IntegrationID: integrationID,
+		EngineID:      c.identity.EngineID,
+		Status:        status,
+		StartedAt:     now.Format(time.RFC3339),
+		FinishedAt:    now.Format(time.RFC3339),
+		DurationMs:    0,
+		MessageCount:  count,
+	}
+	if failures > 0 {
+		run.ErrorSummary = fmt.Sprintf("%.0f exchange failure(s)", float64(failures))
+	}
+
+	if err := store.StartRun(run); err != nil {
+		slog.Warn("RecordExchangeBatch: StartRun failed", "err", err)
+		return
+	}
+	if status == runlog.StatusCompleted {
+		if err := store.CompleteRun(runID, count, 0); err != nil {
+			slog.Warn("RecordExchangeBatch: CompleteRun failed", "err", err)
+		}
+	} else {
+		if err := store.FailRun(runID, run.ErrorSummary, ""); err != nil {
+			slog.Warn("RecordExchangeBatch: FailRun failed", "err", err)
+		}
+	}
+
+	// Send latest completed run to cloud
+	runs, _, err := store.QueryRuns(integrationID, runlog.StatusCompleted, 1, 0)
+	if err == nil && len(runs) > 0 {
+		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
+	}
+}
+
 // RecordRunFailure satisfies monitor.Sender — marks the active run as failed.
 func (c *Connection) RecordRunFailure(integrationID string, errorSummary string) {
 	c.runsMu.Lock()
