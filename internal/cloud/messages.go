@@ -60,12 +60,13 @@ type InboundMessage struct {
 
 // DeployMessage is a deploy command from cloud.
 type DeployMessage struct {
-	Type          string        `json:"type"`
-	RequestID     string        `json:"request_id"`
-	IntegrationID string        `json:"integration_id"`
-	Revision      int           `json:"revision"`
-	Routes        []RouteBundle `json:"routes"`
-	Secrets       []SecretEntry `json:"secrets,omitempty"`
+	Type          string            `json:"type"`
+	RequestID     string            `json:"request_id"`
+	IntegrationID string            `json:"integration_id"`
+	Revision      int               `json:"revision"`
+	Routes        []RouteBundle     `json:"routes"`
+	Secrets       []SecretEntry     `json:"secrets,omitempty"`
+	Properties    map[string]string `json:"properties,omitempty"`
 }
 
 type RouteBundle struct {
@@ -127,6 +128,7 @@ type DeployResultMessage struct {
 	Status        string        `json:"status"` // success | error
 	Routes        []RouteStatus `json:"routes,omitempty"`
 	Error         string        `json:"error,omitempty"`
+	Warnings      []string      `json:"warnings,omitempty"`
 }
 
 type RouteStatus struct {

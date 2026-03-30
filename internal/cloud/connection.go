@@ -273,33 +273,28 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 		Revision:      dm.Revision,
 	}
 
-	// Build secret map — decrypt cipher if present
-	secrets := make(map[string]string)
-	for _, s := range dm.Secrets {
-		if s.Cipher != "" {
-			// Decrypt with engine private key
-			plaintext, err := c.decryptSecret(s.Cipher)
-			if err != nil {
-				slog.Error("Failed to decrypt secret", "var", s.Var, "error", err)
-				continue
-			}
-			secrets[s.Var] = plaintext
-		} else if s.Value != "" {
-			// Fallback: plaintext (dev mode)
-			secrets[s.Var] = s.Value
-		}
+	// Convert cloud.SecretEntry → deploy.SecretEntry for the deployer.
+	deploySecrets := make([]deploy.SecretEntry, len(dm.Secrets))
+	for i, s := range dm.Secrets {
+		deploySecrets[i] = deploy.SecretEntry{Var: s.Var, Cipher: s.Cipher, Value: s.Value}
 	}
 
-	// Deploy routes
+	// Deploy routes — deployer handles decryption and .properties file writing.
 	routeStatuses := make([]RouteStatus, 0, len(dm.Routes))
 	var deployErr error
+	var allWarnings []string
 	for _, route := range dm.Routes {
-		if err := c.deployer.Deploy(route.ID, route.CamelYAML, secrets); err != nil {
+		warnings, err := c.deployer.Deploy(route.ID, route.CamelYAML, dm.Properties, deploySecrets)
+		allWarnings = append(allWarnings, warnings...)
+		if err != nil {
 			deployErr = err
 			routeStatuses = append(routeStatuses, RouteStatus{ID: route.ID, Status: "Failed"})
 		} else {
 			routeStatuses = append(routeStatuses, RouteStatus{ID: route.ID, Status: "Deployed"})
 		}
+	}
+	if len(allWarnings) > 0 {
+		result.Warnings = allWarnings
 	}
 
 	result.Routes = routeStatuses

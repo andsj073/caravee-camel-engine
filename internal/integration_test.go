@@ -17,7 +17,7 @@ import (
 )
 
 // TestFullSecretsFlowIntegration simulates the complete end-to-end flow:
-// Browser → Cloud → Engine → Camel
+// Browser → Cloud → Engine → .properties file (Camel resolves at runtime)
 func TestFullSecretsFlowIntegration(t *testing.T) {
 	// Setup temp directories
 	tempDir := t.TempDir()
@@ -57,34 +57,14 @@ func TestFullSecretsFlowIntegration(t *testing.T) {
 
 	// Step 5: Cloud stores cipher (never sees plaintext)
 	t.Log("Step 5: Cloud stores cipher in DB (plaintext never visible)")
-	// In real system: INSERT INTO endpoint_bindings (secret_cipher) VALUES (?)
 
-	// Step 6: Deploy — cloud sends cipher to engine via WSS
+	// Step 6: Deploy — cloud sends cipher bundle to engine via WSS
 	t.Log("Step 6: Deploy sends cipher bundle to engine")
-	// Simulating DeployMessage.Secrets
-	bundleSecrets := map[string]string{
-		"API_KEY": "", // Will be decrypted from cipher
-	}
 
-	// Load engine private key
-	privKey, err := pairing.LoadPrivateKey(dataDir)
-	if err != nil {
-		t.Fatalf("Private key load failed: %v", err)
-	}
-
-	// Step 7: Engine decrypts cipher
-	t.Log("Step 7: Engine decrypts with private key")
-	decryptedSecret, err := pairing.DecryptSecret(cipherBase64, privKey)
-	if err != nil {
-		t.Fatalf("Decryption failed: %v", err)
-	}
-
-	bundleSecrets["API_KEY"] = decryptedSecret
-
-	// Step 8: Deployer writes route with secret
-	t.Log("Step 8: Deployer resolves secret placeholder and writes Camel YAML")
+	// Step 7: Engine deployer decrypts cipher and writes .properties file
+	t.Log("Step 7: Deployer decrypts with private key and writes .properties")
 	secretMgr := deploy.NewSecretManager(secretsDir)
-	deployer := deploy.NewDeployer(routesDir, secretMgr)
+	deployer := deploy.NewDeployer(routesDir, secretMgr, dataDir)
 
 	routeYAML := `- route:
     id: test.api-call
@@ -93,45 +73,49 @@ func TestFullSecretsFlowIntegration(t *testing.T) {
       steps:
         - setHeader:
             name: X-API-Key
-            constant: "{{ API_KEY }}"
+            constant: "{{api.key}}"
         - to:
             uri: https://api.example.com/data
 `
 
-	err = deployer.Deploy("test.api-call", routeYAML, bundleSecrets)
+	_, err = deployer.Deploy("test.api-call", routeYAML, nil, []deploy.SecretEntry{
+		{Var: "API_KEY", Cipher: cipherBase64},
+	})
 	if err != nil {
 		t.Fatalf("Deploy failed: %v", err)
 	}
 
-	// Step 9: Verify deployed route contains plaintext secret
-	t.Log("Step 9: Verify deployed Camel YAML contains plaintext secret")
+	// Step 8: Verify .properties file contains decrypted secret
+	t.Log("Step 8: Verify .properties file contains decrypted secret under normalized key")
+	propsFile := filepath.Join(routesDir, "test-api-call.properties")
+	propsContent, err := os.ReadFile(propsFile)
+	if err != nil {
+		t.Fatalf("Properties file not created: %v", err)
+	}
+
+	propsStr := string(propsContent)
+	if !strings.Contains(propsStr, "api.key="+originalSecret) {
+		t.Errorf(".properties file does not contain decrypted secret")
+		t.Logf("Expected to find: api.key=%s", originalSecret)
+		t.Logf(".properties content:\n%s", propsStr)
+	}
+
+	// Step 9: Verify YAML still has {{...}} placeholder (Camel resolves at runtime)
+	t.Log("Step 9: Verify YAML preserves {{...}} placeholder for Camel runtime")
 	deployedYAML, err := os.ReadFile(filepath.Join(routesDir, "test-api-call.yaml"))
 	if err != nil {
 		t.Fatalf("Failed to read deployed route: %v", err)
 	}
-
-	deployedStr := string(deployedYAML)
-
-	// Verify secret was resolved
-	if !strings.Contains(deployedStr, originalSecret) {
-		t.Errorf("Deployed YAML does not contain decrypted secret")
-		t.Logf("Expected to find: %s", originalSecret)
-		t.Logf("Deployed YAML:\n%s", deployedStr)
+	if !strings.Contains(string(deployedYAML), "{{api.key}}") {
+		t.Error("Deployed YAML should preserve {{api.key}} placeholder for Camel")
 	}
 
-	// Verify placeholder was removed
-	if strings.Contains(deployedStr, "{{ API_KEY }}") {
-		t.Error("Deployed YAML still contains placeholder")
-	}
-
-	// Step 10: Verify secret never touched disk in plaintext (except in final route)
-	t.Log("Step 10: Verify zero-trust — secret only exists in final route")
-	// No plaintext secret file should exist in data dir (except secrets/ directory itself)
+	// Step 10: Verify cipher text never stored as plaintext outside routes dir
+	t.Log("Step 10: Verify zero-trust — original cipher not stored as plaintext outside routes")
 	secretFiles, _ := filepath.Glob(filepath.Join(dataDir, "*secret*"))
 	for _, f := range secretFiles {
 		info, _ := os.Stat(f)
 		basename := filepath.Base(f)
-		// Allow secrets/ directory and secrets.env, but not actual secret files
 		if info != nil && !info.IsDir() && basename != "secrets.env" && !strings.Contains(f, "/routes/") {
 			t.Errorf("Unexpected plaintext secret file found: %s", f)
 		}
@@ -140,8 +124,8 @@ func TestFullSecretsFlowIntegration(t *testing.T) {
 	t.Log("✅ Full secrets flow verified:")
 	t.Logf("   Browser encrypted: %s → %s", originalSecret, cipherBase64[:50]+"...")
 	t.Logf("   Cloud stored cipher (no plaintext)")
-	t.Logf("   Engine decrypted: %s", decryptedSecret)
-	t.Logf("   Camel route contains plaintext for runtime use")
+	t.Logf("   Engine wrote .properties: api.key=%s", originalSecret)
+	t.Logf("   Camel route uses {{api.key}} resolved at runtime from .properties")
 }
 
 // browserSideEncryption simulates browser WebCrypto RSA-OAEP encryption

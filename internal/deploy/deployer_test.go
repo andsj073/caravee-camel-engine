@@ -13,7 +13,7 @@ func TestDeploy(t *testing.T) {
 	secretsDir := filepath.Join(tempDir, "secrets")
 
 	secretMgr := NewSecretManager(secretsDir)
-	deployer := NewDeployer(routesDir, secretMgr)
+	deployer := NewDeployer(routesDir, secretMgr, "")
 
 	// Deploy a route
 	routeID := "test-integration.tick"
@@ -26,7 +26,7 @@ func TestDeploy(t *testing.T) {
             message: "Hello test"
 `
 
-	err := deployer.Deploy(routeID, yaml, nil)
+	_, err := deployer.Deploy(routeID, yaml, nil, nil)
 	if err != nil {
 		t.Fatalf("Deploy failed: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestUndeploy(t *testing.T) {
 	secretsDir := filepath.Join(tempDir, "secrets")
 
 	secretMgr := NewSecretManager(secretsDir)
-	deployer := NewDeployer(routesDir, secretMgr)
+	deployer := NewDeployer(routesDir, secretMgr, "")
 
 	// Deploy two routes for the same integration
 	yaml1 := `- route:
@@ -68,8 +68,8 @@ func TestUndeploy(t *testing.T) {
       uri: timer:tock
 `
 
-	deployer.Deploy("test-integration.route1", yaml1, nil)
-	deployer.Deploy("test-integration.route2", yaml2, nil)
+	deployer.Deploy("test-integration.route1", yaml1, nil, nil)
+	deployer.Deploy("test-integration.route2", yaml2, nil, nil)
 
 	// Verify both files exist
 	file1 := filepath.Join(routesDir, "test-integration-route1.yaml")
@@ -97,101 +97,122 @@ func TestUndeploy(t *testing.T) {
 	}
 }
 
-func TestSecretResolution(t *testing.T) {
+func TestPropertiesFileWritten(t *testing.T) {
 	tempDir := t.TempDir()
 	routesDir := filepath.Join(tempDir, "routes")
 	secretsDir := filepath.Join(tempDir, "secrets")
 
 	secretMgr := NewSecretManager(secretsDir)
-	deployer := NewDeployer(routesDir, secretMgr)
+	deployer := NewDeployer(routesDir, secretMgr, "")
 
-	// YAML with secret placeholder
 	yaml := `- route:
-    id: test.secure
+    id: test.props
     from:
       uri: timer:tick
       steps:
-        - setHeader:
-            name: X-API-Key
-            constant: "{{ MY_SECRET }}"
-        - log:
-            message: "test"
+        - to:
+            uri: "http:{{orders.api.url}}/orders"
 `
 
-	bundleSecrets := map[string]string{
-		"MY_SECRET": "secret123",
+	properties := map[string]string{
+		"orders.api.url": "https://api.example.com",
+		"sync.interval":  "5000",
 	}
 
-	err := deployer.Deploy("test.secure", yaml, bundleSecrets)
+	_, err := deployer.Deploy("test.props", yaml, properties, nil)
 	if err != nil {
 		t.Fatalf("Deploy failed: %v", err)
 	}
 
-	// Read deployed file
-	content, err := os.ReadFile(filepath.Join(routesDir, "test-secure.yaml"))
+	// Verify .properties file was written
+	propsFile := filepath.Join(routesDir, "test-props.properties")
+	content, err := os.ReadFile(propsFile)
 	if err != nil {
-		t.Fatalf("Failed to read file: %v", err)
+		t.Fatalf("Properties file not created: %v", err)
 	}
 
 	contentStr := string(content)
-
-	// Secret should be resolved
-	if !strings.Contains(contentStr, "secret123") {
-		t.Error("Secret not resolved in YAML")
+	if !strings.Contains(contentStr, "orders.api.url=https://api.example.com") {
+		t.Errorf("Properties file missing orders.api.url: %s", contentStr)
+	}
+	if !strings.Contains(contentStr, "sync.interval=5000") {
+		t.Errorf("Properties file missing sync.interval: %s", contentStr)
 	}
 
-	// Placeholder should be removed
-	if strings.Contains(contentStr, "{{ MY_SECRET }}") {
-		t.Error("Secret placeholder still present")
+	// YAML should have {{...}} placeholders resolved against properties map
+	yamlContent, err := os.ReadFile(filepath.Join(routesDir, "test-props.yaml"))
+	if err != nil {
+		t.Fatalf("YAML file not created: %v", err)
+	}
+	if strings.Contains(string(yamlContent), "{{orders.api.url}}") {
+		t.Error("YAML should have {{...}} placeholders resolved, not preserved")
+	}
+	if !strings.Contains(string(yamlContent), "https://api.example.com") {
+		t.Error("YAML should contain resolved URL value")
 	}
 }
 
-func TestSecretResolutionPriority(t *testing.T) {
+func TestPropertiesOverwriteWarning(t *testing.T) {
 	tempDir := t.TempDir()
 	routesDir := filepath.Join(tempDir, "routes")
 	secretsDir := filepath.Join(tempDir, "secrets")
 
-	// Create local secrets.env file (priority 1)
+	secretMgr := NewSecretManager(secretsDir)
+	deployer := NewDeployer(routesDir, secretMgr, "")
+
+	yaml := "- route: {}"
+
+	// First deploy
+	deployer.Deploy("test.warn", yaml, map[string]string{"my.key": "value1"}, nil)
+
+	// Second deploy with different value — should warn
+	warnings, err := deployer.Deploy("test.warn", yaml, map[string]string{"my.key": "value2"}, nil)
+	if err != nil {
+		t.Fatalf("Deploy failed: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Error("Expected overwrite warning, got none")
+	}
+	if !strings.Contains(warnings[0], "my.key") {
+		t.Errorf("Warning should mention key name: %v", warnings)
+	}
+}
+
+func TestLocalSecretInlineResolution(t *testing.T) {
+	tempDir := t.TempDir()
+	routesDir := filepath.Join(tempDir, "routes")
+	secretsDir := filepath.Join(tempDir, "secrets")
+
+	// Create local secrets.env file
 	os.MkdirAll(secretsDir, 0755)
 	secretsEnvFile := filepath.Join(secretsDir, "secrets.env")
-	os.WriteFile(secretsEnvFile, []byte("MY_VAR=local-value\n"), 0600)
+	os.WriteFile(secretsEnvFile, []byte("MY_LOCAL_VAR=local-value\n"), 0600)
 
 	secretMgr := NewSecretManager(secretsDir)
-	deployer := NewDeployer(routesDir, secretMgr)
+	deployer := NewDeployer(routesDir, secretMgr, "")
 
 	yaml := `- route:
-    id: test.priority
+    id: test.local
     from:
       uri: timer:tick
       steps:
         - log:
-            message: "{{ MY_VAR }}"
+            message: "{{ MY_LOCAL_VAR }}"
 `
 
-	// Bundle provides different value (priority 3, should be overridden)
-	bundleSecrets := map[string]string{
-		"MY_VAR": "bundle-value",
-	}
-
-	err := deployer.Deploy("test.priority", yaml, bundleSecrets)
+	_, err := deployer.Deploy("test.local", yaml, nil, nil)
 	if err != nil {
 		t.Fatalf("Deploy failed: %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(routesDir, "test-priority.yaml"))
+	content, err := os.ReadFile(filepath.Join(routesDir, "test-local.yaml"))
 	if err != nil {
 		t.Fatalf("Failed to read file: %v", err)
 	}
 
-	contentStr := string(content)
-
-	// Should use local secret (priority 1)
-	if !strings.Contains(contentStr, "local-value") {
-		t.Error("Local secret was not used (priority mismatch)")
-	}
-
-	if strings.Contains(contentStr, "bundle-value") {
-		t.Error("Bundle secret was used instead of local (priority violation)")
+	// Local secrets.env vars are still inlined
+	if !strings.Contains(string(content), "local-value") {
+		t.Error("Local secret.env var was not inlined in YAML")
 	}
 }
 
@@ -201,11 +222,11 @@ func TestListDeployed(t *testing.T) {
 	secretsDir := filepath.Join(tempDir, "secrets")
 
 	secretMgr := NewSecretManager(secretsDir)
-	deployer := NewDeployer(routesDir, secretMgr)
+	deployer := NewDeployer(routesDir, secretMgr, "")
 
 	// Deploy several routes
-	deployer.Deploy("integration1.route1", "- route: {}", nil)
-	deployer.Deploy("integration2.route1", "- route: {}", nil)
+	deployer.Deploy("integration1.route1", "- route: {}", nil, nil)
+	deployer.Deploy("integration2.route1", "- route: {}", nil, nil)
 
 	deployed, err := deployer.ListDeployed()
 	if err != nil {

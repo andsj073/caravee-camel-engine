@@ -41,7 +41,7 @@ func main() {
 	slog.Info("Cloud connection configured", "tenant_id", cfg.TenantID, "wss_url", cfg.WSSURL)
 
 	secretMgr    := deploy.NewSecretManager(*dataDir)
-	deployer     := deploy.NewDeployer(*routesDir, secretMgr)
+	deployer     := deploy.NewDeployer(*routesDir, secretMgr, *dataDir)
 	camelClient  := camel.New(*camelURL)
 
 	conn := cloud.NewConnection(cfg, identity, deployer, camelClient, version)
