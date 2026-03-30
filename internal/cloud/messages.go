@@ -19,6 +19,7 @@ const (
 	MsgTypePing          = "ping"
 	MsgTypeTelemetry     = "telemetry"
 	MsgTypeSetLabel      = "set_label"
+	MsgTypeGetHTTPPaths  = "get_http_paths"
 )
 
 // Message types from agent → cloud
@@ -33,6 +34,7 @@ const (
 	MsgTypePong           = "pong"
 	MsgTypeHealth         = "telemetry"
 	MsgTypeError          = "error"
+	MsgTypeHTTPPaths      = "http_paths"
 )
 
 // RouteCommandMessage is a suspend/resume/status command for a single route.
@@ -221,6 +223,27 @@ type RouteErrorMessage struct {
 	TotalFailures float64 `json:"total_failures"`
 	InFlight      float64 `json:"inflight"`
 	Timestamp     string  `json:"timestamp"`
+}
+
+// GetHTTPPathsMessage requests active platform-http paths from the Camel runtime.
+type GetHTTPPathsMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+}
+
+// HTTPPathEntry describes a single active platform-http route.
+type HTTPPathEntry struct {
+	Path          string   `json:"path"`
+	Methods       []string `json:"methods"`
+	IntegrationID string   `json:"integration_id"`
+}
+
+// HTTPPathsResponse reports active platform-http paths to cloud.
+type HTTPPathsResponse struct {
+	Type      string          `json:"type"`
+	RequestID string          `json:"request_id"`
+	Available bool            `json:"available"`
+	Paths     []HTTPPathEntry `json:"paths"`
 }
 
 // Run history message types

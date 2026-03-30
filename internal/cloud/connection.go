@@ -250,6 +250,11 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 			slog.Info("Label updated", "label", label)
 		}
 
+	case MsgTypeGetHTTPPaths:
+		var req GetHTTPPathsMessage
+		json.Unmarshal(msg.Raw, &req)
+		go c.handleGetHTTPPaths(req)
+
 	case MsgTypeGetRunHistory:
 		var req GetRunHistoryMessage
 		if err := json.Unmarshal(msg.Raw, &req); err != nil {
@@ -489,6 +494,26 @@ func (c *Connection) handleGetRouteMetrics(req GetRouteMetricsMessage) {
 		result.MeanDurationMs    = m["camel_exchange_duration_milliseconds_sum"] /
 			max(m["camel_exchange_duration_milliseconds_count"], 1)
 		result.MaxDurationMs = m["camel_exchange_duration_milliseconds_max"]
+	}
+	c.sendMessage(result)
+}
+
+func (c *Connection) handleGetHTTPPaths(req GetHTTPPathsMessage) {
+	paths, err := c.camel.GetPlatformHTTPPaths()
+	result := &HTTPPathsResponse{
+		Type:      MsgTypeHTTPPaths,
+		RequestID: req.RequestID,
+		Available: err == nil,
+		Paths:     []HTTPPathEntry{},
+	}
+	if err == nil {
+		for _, p := range paths {
+			result.Paths = append(result.Paths, HTTPPathEntry{
+				Path:          p.Path,
+				Methods:       p.Methods,
+				IntegrationID: p.IntegrationID,
+			})
+		}
 	}
 	c.sendMessage(result)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -161,6 +162,69 @@ func (c *Client) RouteStatus(routeID string) (string, error) {
 		return "", fmt.Errorf("route status decode: %w", err)
 	}
 	return result.Status, nil
+}
+
+// PlatformHTTPPath describes an active platform-http route exposed by the Camel runtime.
+type PlatformHTTPPath struct {
+	Path          string   `json:"path"`
+	Methods       []string `json:"methods"`
+	IntegrationID string   `json:"integration_id"`
+}
+
+// GetPlatformHTTPPaths queries the Camel routes API and returns all routes that use
+// platform-http as a source, including their paths, HTTP methods, and route IDs.
+func (c *Client) GetPlatformHTTPPaths() ([]PlatformHTTPPath, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/camel/routes")
+	if err != nil {
+		return nil, ErrNoSidecar
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("camel routes: HTTP %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Value []struct {
+			RouteID string `json:"routeId"`
+			URI     string `json:"uri"`
+			State   string `json:"state"`
+		} `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("camel routes decode: %w", err)
+	}
+
+	var paths []PlatformHTTPPath
+	for _, r := range body.Value {
+		if !strings.HasPrefix(r.URI, "platform-http:") {
+			continue
+		}
+		// Parse URI: platform-http:///path?httpMethodRestrict=POST,GET
+		parsed, err := url.Parse(r.URI)
+		if err != nil {
+			slog.Warn("Could not parse platform-http URI", "uri", r.URI, "error", err)
+			continue
+		}
+		path := parsed.Path
+		if path == "" {
+			path = "/"
+		}
+		var methods []string
+		if restrict := parsed.Query().Get("httpMethodRestrict"); restrict != "" {
+			for _, m := range strings.Split(restrict, ",") {
+				if m = strings.TrimSpace(m); m != "" {
+					methods = append(methods, m)
+				}
+			}
+		}
+		paths = append(paths, PlatformHTTPPath{
+			Path:          path,
+			Methods:       methods,
+			IntegrationID: r.RouteID,
+		})
+	}
+	return paths, nil
 }
 
 // ErrNoSidecar is returned when the Camel sidecar is not reachable.
