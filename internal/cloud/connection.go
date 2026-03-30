@@ -309,32 +309,6 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 	} else {
 		result.Status = "success"
 
-		// Start a run record for this deployment
-		runID := runlog.GenerateRunID()
-		startedAt := time.Now()
-		c.runsMu.Lock()
-		c.currentRuns[dm.IntegrationID] = &runState{
-			runID:     runID,
-			startedAt: startedAt,
-			revision:  dm.Revision,
-		}
-		c.runsMu.Unlock()
-
-		if c.getRunStore() != nil {
-			run := runlog.Run{
-				RunID:         runID,
-				IntegrationID: dm.IntegrationID,
-				EngineID:      c.identity.EngineID,
-				Revision:      dm.Revision,
-				StartedAt:     startedAt.UTC().Format(time.RFC3339),
-			}
-			if err := c.getRunStore().StartRun(run); err != nil {
-				slog.Warn("Failed to record run start", "error", err)
-			} else {
-				slog.Info("Run started", "run_id", runID, "integration_id", dm.IntegrationID)
-			}
-		}
-
 		// Wait for Camel to pick up routes, then verify health
 		go func() {
 			time.Sleep(3 * time.Second)
@@ -587,9 +561,6 @@ func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage)
 func (c *Connection) handleUndeploy(um UndeployMessage) {
 	slog.Info("Undeploying integration", "integration_id", um.IntegrationID)
 
-	// Complete the active run before undeploying
-	c.completeCurrentRun(um.IntegrationID)
-
 	if err := c.deployer.Undeploy(um.IntegrationID); err != nil {
 		c.sendError(um.RequestID, "UNDEPLOY_FAILED", err.Error())
 		return
@@ -603,31 +574,6 @@ func (c *Connection) handleUndeploy(um UndeployMessage) {
 	})
 }
 
-// completeCurrentRun completes the active run for an integration (called on undeploy).
-func (c *Connection) completeCurrentRun(integrationID string) {
-	c.runsMu.Lock()
-	rs, ok := c.currentRuns[integrationID]
-	if ok {
-		delete(c.currentRuns, integrationID)
-	}
-	c.runsMu.Unlock()
-
-	if !ok || c.getRunStore() == nil {
-		return
-	}
-	durationMs := time.Since(rs.startedAt).Milliseconds()
-	if err := c.getRunStore().CompleteRun(rs.runID, rs.exchanges, durationMs); err != nil {
-		slog.Warn("Failed to complete run", "error", err)
-		return
-	}
-	slog.Info("Run completed", "run_id", rs.runID, "integration_id", integrationID, "duration_ms", durationMs)
-
-	// Push run event to cloud
-	runs, _, err := c.getRunStore().QueryRuns(integrationID, runlog.StatusCompleted, 1, 0)
-	if err == nil && len(runs) > 0 {
-		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
-	}
-}
 
 // getRunStore lazily initializes the run store on first use.
 // This avoids failures at startup when the /data PVC may not be ready yet.
