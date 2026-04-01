@@ -37,8 +37,9 @@ jobs:
 
       - name: Build Go agent
         run: |
+          BUILD_VERSION="$(date -u +%Y-%m-%d).${{ github.run_number }}"
           GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" \
+            -ldflags="-s -w -X main.version=${BUILD_VERSION}" \
             -o caravee-engine ./cmd/agent/
 
       - name: Build Camel Quarkus runtime
@@ -47,9 +48,10 @@ jobs:
 
       - name: Build Docker image
         run: |
+          BUILD_VERSION="$(date -u +%Y-%m-%d).${{ github.run_number }}"
           docker build -f Dockerfile.full -t caravee-engine:full .
           docker tag caravee-engine:full ghcr.io/${{ github.repository_owner }}/caravee-engine:latest
-          docker tag caravee-engine:full ghcr.io/${{ github.repository_owner }}/caravee-engine:${{ github.sha }}
+          docker tag caravee-engine:full ghcr.io/${{ github.repository_owner }}/caravee-engine:${BUILD_VERSION}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -60,6 +62,7 @@ jobs:
 
       - name: Push image
         run: |
+          BUILD_VERSION="$(date -u +%Y-%m-%d).${{ github.run_number }}"
           docker push ghcr.io/${{ github.repository_owner }}/caravee-engine:latest
-          docker push ghcr.io/${{ github.repository_owner }}/caravee-engine:${{ github.sha }}
-          echo "✅ Image pushed: ghcr.io/${{ github.repository_owner }}/caravee-engine:latest"
+          docker push ghcr.io/${{ github.repository_owner }}/caravee-engine:${BUILD_VERSION}
+          echo "✅ Image pushed: ghcr.io/${{ github.repository_owner }}/caravee-engine:latest (${BUILD_VERSION})"

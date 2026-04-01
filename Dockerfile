@@ -4,7 +4,8 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=0.1.0" -o caravee-agent ./cmd/agent
+ARG BUILD_VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${BUILD_VERSION}" -o caravee-agent ./cmd/agent
 
 # Stage 2: Runtime — Camel Quarkus + Agent
 FROM eclipse-temurin:21-jre-alpine
