@@ -1,7 +1,10 @@
 package cloud
 
 import (
+	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,7 +24,7 @@ import (
 )
 
 const (
-	maxReconnectDelay = 30 * time.Second
+	maxReconnectDelay = 300 * time.Second
 	pingInterval      = 30 * time.Second
 	writeTimeout      = 10 * time.Second
 )
@@ -138,7 +141,13 @@ func (c *Connection) connectAndServe() error {
 	c.ws = ws
 	c.mu.Unlock()
 
-	slog.Info("Connected to cloud")
+	slog.Info("Connected to cloud — awaiting auth challenge")
+
+	// ── RSA challenge-response authentication ──
+	if err := c.authenticate(ws); err != nil {
+		ws.Close()
+		return fmt.Errorf("auth: %w", err)
+	}
 
 	// Send connected message
 	deployed, err := c.deployer.ListDeployed()
@@ -184,6 +193,71 @@ func (c *Connection) connectAndServe() error {
 
 		go c.handleMessage(msg)
 	}
+}
+
+// authenticate handles the RSA challenge-response handshake.
+// Cloud sends {"type":"auth_challenge","nonce":"<uuid>"}, agent signs the nonce
+// with its private key and replies with {"type":"auth_response","engine_id":"...","signature":"<base64>"}.
+// Cloud verifies and replies with {"type":"auth_ok"} or closes the connection.
+func (c *Connection) authenticate(ws *websocket.Conn) error {
+	if c.privKey == nil {
+		return fmt.Errorf("private key not loaded — cannot authenticate")
+	}
+
+	// Read auth_challenge (30s timeout matches backend)
+	ws.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_, data, err := ws.ReadMessage()
+	if err != nil {
+		return fmt.Errorf("reading auth_challenge: %w", err)
+	}
+
+	var challenge struct {
+		Type  string `json:"type"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(data, &challenge); err != nil || challenge.Type != "auth_challenge" {
+		return fmt.Errorf("expected auth_challenge, got: %s", string(data))
+	}
+
+	// Sign nonce with RSA-PKCS1v15-SHA256
+	hash := crypto.SHA256.New()
+	hash.Write([]byte(challenge.Nonce))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, c.privKey, crypto.SHA256, hash.Sum(nil))
+	if err != nil {
+		return fmt.Errorf("signing nonce: %w", err)
+	}
+
+	// Send auth_response
+	resp := map[string]string{
+		"type":      "auth_response",
+		"engine_id": c.identity.EngineID,
+		"signature": base64.StdEncoding.EncodeToString(signature),
+	}
+	ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := ws.WriteJSON(resp); err != nil {
+		return fmt.Errorf("sending auth_response: %w", err)
+	}
+	slog.Info("Auth challenge signed, sent auth_response")
+
+	// Wait for auth_ok (10s)
+	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, data, err = ws.ReadMessage()
+	if err != nil {
+		return fmt.Errorf("reading auth_ok: %w", err)
+	}
+
+	var ack struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &ack); err != nil || ack.Type != "auth_ok" {
+		return fmt.Errorf("expected auth_ok, got: %s", string(data))
+	}
+
+	// Clear deadline for normal operation
+	ws.SetReadDeadline(time.Time{})
+
+	slog.Info("Authentication successful")
+	return nil
 }
 
 func (c *Connection) handleMessage(msg InboundMessage) {
