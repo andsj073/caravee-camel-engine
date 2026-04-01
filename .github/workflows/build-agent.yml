@@ -8,7 +8,9 @@ on:
       - 'internal/**'
       - 'go.mod'
       - 'go.sum'
+      - 'Dockerfile'
       - 'Dockerfile.agent'
+      - '.github/workflows/build-agent.yml'
   workflow_dispatch:
 
 permissions:
