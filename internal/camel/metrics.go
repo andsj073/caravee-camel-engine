@@ -55,22 +55,27 @@ func (c *Client) GetEngineMetrics() (map[string]float64, error) {
 	return c.ScrapeMetrics("__engine__")
 }
 
-// GetRouteMetrics returns metrics for a single Camel route, filtered by routeId label.
-func (c *Client) GetRouteMetrics(routeID string) (map[string]float64, error) {
+// GetRouteMetrics returns metrics for an integration, filtered by routeId label.
+// Uses prefix match: integration "sales-orders-receiver" matches routes
+// "sales-orders-receiver.main", "sales-orders-receiver.secondary", etc.
+// Values are summed across all matching routes.
+func (c *Client) GetRouteMetrics(integrationID string) (map[string]float64, error) {
 	all, err := c.ScrapeMetrics("__routes__")
 	if err != nil {
 		return nil, err
 	}
-	label := fmt.Sprintf(`routeId="%s"`, routeID)
+	// Match exact routeId or routeId starting with integrationID + "."
+	exactLabel := fmt.Sprintf(`routeId="%s"`, integrationID)
+	prefixLabel := fmt.Sprintf(`routeId="%s.`, integrationID)
 	result := map[string]float64{}
 	for k, v := range all {
-		if strings.Contains(k, label) {
+		if strings.Contains(k, exactLabel) || strings.Contains(k, prefixLabel) {
 			bare := k
 			if lbrace := strings.Index(k, "{"); lbrace != -1 {
 				bare = k[:lbrace]
 			}
-			// Use underscore name (camel_exchanges_total)
-			result[bare] = v
+			// Sum across all matching routes (e.g. .main + .secondary)
+			result[bare] += v
 		}
 	}
 	return result, nil
