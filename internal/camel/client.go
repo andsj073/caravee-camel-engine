@@ -227,25 +227,29 @@ func (c *Client) GetPlatformHTTPPaths() ([]PlatformHTTPPath, error) {
 	return paths, nil
 }
 
-// GetCamelVersion tries to fetch the Camel version from /q/info or /observe/metrics.
+// GetCamelVersion tries to fetch the Camel version from /q/info (Quarkus info endpoint).
+// Requires quarkus-info extension in the Camel runtime.
 func (c *Client) GetCamelVersion() string {
-	// Try /q/info first (Quarkus info endpoint)
 	resp, err := c.httpClient.Get(c.baseURL + "/q/info")
-	if err == nil {
-		defer resp.Body.Close()
-		if resp.StatusCode == 200 {
-			var info map[string]interface{}
-			if json.NewDecoder(resp.Body).Decode(&info) == nil {
-				if camel, ok := info["camel.version"]; ok {
-					return fmt.Sprintf("%v", camel)
-				}
-				// Try nested: {"camel": {"version": "x.y.z"}}
-				if camelMap, ok := info["camel"].(map[string]interface{}); ok {
-					if v, ok := camelMap["version"]; ok {
-						return fmt.Sprintf("%v", v)
-					}
-				}
-			}
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	var info map[string]interface{}
+	if json.NewDecoder(resp.Body).Decode(&info) != nil {
+		return ""
+	}
+	// Flat key
+	if v, ok := info["camel.version"]; ok {
+		return fmt.Sprintf("%v", v)
+	}
+	// Nested: {"camel": {"version": "x.y.z"}}
+	if camelMap, ok := info["camel"].(map[string]interface{}); ok {
+		if v, ok := camelMap["version"]; ok {
+			return fmt.Sprintf("%v", v)
 		}
 	}
 	return ""
