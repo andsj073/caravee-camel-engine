@@ -20,6 +20,8 @@ const (
 	MsgTypeTelemetry     = "telemetry"
 	MsgTypeSetLabel      = "set_label"
 	MsgTypeGetHTTPPaths  = "get_http_paths"
+	MsgTypeDeployTest    = "deploy_test"
+	MsgTypeCleanupTest   = "cleanup_test"
 )
 
 // Message types from agent → cloud
@@ -35,6 +37,7 @@ const (
 	MsgTypeHealth         = "telemetry"
 	MsgTypeError          = "error"
 	MsgTypeHTTPPaths      = "http_paths"
+	MsgTypeTestResult     = "test_result"
 )
 
 // RouteCommandMessage is a suspend/resume/status command for a single route.
@@ -280,4 +283,35 @@ type RunHistoryMessage struct {
 type RunEventMessage struct {
 	Type string      `json:"type"`
 	Run  runlog.Run  `json:"run"`
+}
+
+// DeployTestMessage requests the agent to deploy a test route, capture output, and clean up.
+type DeployTestMessage struct {
+	Type           string            `json:"type"`
+	RequestID      string            `json:"request_id"`
+	Nonce          string            `json:"nonce"`
+	RouteID        string            `json:"route_id"`
+	CamelYAML      string            `json:"camel_yaml"`
+	TestFiles      map[string]string `json:"test_files,omitempty"`      // path → content
+	CaptureTimeout int               `json:"capture_timeout_seconds"`   // default 15
+}
+
+// CleanupTestMessage requests cleanup of a test route + temp files.
+type CleanupTestMessage struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	Nonce     string `json:"nonce"`
+	RouteID   string `json:"route_id"`
+}
+
+// TestResultMessage reports sandbox test results back to cloud.
+type TestResultMessage struct {
+	Type       string   `json:"type"`
+	RequestID  string   `json:"request_id"`
+	Nonce      string   `json:"nonce"`
+	Success    bool     `json:"success"`
+	Captures   []string `json:"captures"`
+	Logs       string   `json:"logs"`
+	DurationMs int64    `json:"duration_ms"`
+	Error      string   `json:"error,omitempty"`
 }

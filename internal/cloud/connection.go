@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -379,6 +381,22 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 			return
 		}
 		go c.handleGetRunHistory(req)
+
+	case MsgTypeDeployTest:
+		var req DeployTestMessage
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
+		go c.handleDeployTest(req)
+
+	case MsgTypeCleanupTest:
+		var req CleanupTestMessage
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
+		go c.handleCleanupTest(req)
 
 	default:
 		slog.Warn("Unknown message type", "type", msg.Type)
@@ -791,4 +809,126 @@ func (c *Connection) decryptSecret(cipherBase64 string) (string, error) {
 		return "", fmt.Errorf("private key not loaded")
 	}
 	return pairing.DecryptSecret(cipherBase64, c.privKey)
+}
+
+// ─── Sandbox test handlers ──────────────────────────────────────────────
+
+func (c *Connection) handleDeployTest(req DeployTestMessage) {
+	start := time.Now()
+	nonce := req.Nonce
+	routeID := req.RouteID
+	timeout := req.CaptureTimeout
+	if timeout <= 0 {
+		timeout = 15
+	}
+
+	slog.Info("Sandbox: deploying test route", "nonce", nonce, "route_id", routeID)
+
+	// 1. Write test files
+	for path, content := range req.TestFiles {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			c.sendTestResult(req.RequestID, nonce, false, nil, "", time.Since(start).Milliseconds(), fmt.Sprintf("mkdir %s: %v", dir, err))
+			return
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			c.sendTestResult(req.RequestID, nonce, false, nil, "", time.Since(start).Milliseconds(), fmt.Sprintf("write %s: %v", path, err))
+			return
+		}
+		slog.Info("Sandbox: wrote test file", "path", path, "bytes", len(content))
+	}
+
+	// 2. Deploy route (no properties or secrets for sandbox — values pre-substituted)
+	_, err := c.deployer.Deploy(routeID, req.CamelYAML, nil, nil)
+	if err != nil {
+		c.sendTestResult(req.RequestID, nonce, false, nil, "", time.Since(start).Milliseconds(), fmt.Sprintf("deploy: %v", err))
+		return
+	}
+
+	// 3. Capture logs — poll Camel metrics for exchange completions
+	slog.Info("Sandbox: capturing output", "timeout_seconds", timeout)
+	captures := []string{}
+	deadline := time.After(time.Duration(timeout) * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var lastExchanges float64
+	stableCount := 0
+
+	for {
+		select {
+		case <-deadline:
+			goto done
+		case <-ticker.C:
+			metrics, err := c.camel.GetRouteMetrics(routeID)
+			if err != nil {
+				continue
+			}
+			total := metrics["camel_exchanges_total"]
+			if total > 0 && total == lastExchanges {
+				stableCount++
+				if stableCount >= 3 { // 3 consecutive polls with same count = done
+					goto done
+				}
+			} else {
+				stableCount = 0
+			}
+			lastExchanges = total
+		}
+	}
+
+done:
+	// 4. Collect logs from Camel (last N lines that contain SANDBOX_CAPTURE)
+	// For now, report exchange count as captures
+	metrics, _ := c.camel.GetRouteMetrics(routeID)
+	exchangeCount := int(metrics["camel_exchanges_total"])
+	failCount := int(metrics["camel_exchanges_failed_total"])
+
+	success := exchangeCount > 0 && failCount == 0
+	logSummary := fmt.Sprintf("exchanges: %d total, %d failed", exchangeCount, failCount)
+
+	if exchangeCount > 0 {
+		captures = append(captures, fmt.Sprintf("%d exchange(s) completed successfully", exchangeCount))
+	}
+	if failCount > 0 {
+		captures = append(captures, fmt.Sprintf("%d exchange(s) failed", failCount))
+	}
+
+	// 5. Undeploy test route
+	c.deployer.Undeploy(routeID)
+	slog.Info("Sandbox: test complete", "nonce", nonce, "success", success, "exchanges", exchangeCount, "duration_ms", time.Since(start).Milliseconds())
+
+	c.sendTestResult(req.RequestID, nonce, success, captures, logSummary, time.Since(start).Milliseconds(), "")
+}
+
+func (c *Connection) handleCleanupTest(req CleanupTestMessage) {
+	nonce := req.Nonce
+	routeID := req.RouteID
+
+	slog.Info("Sandbox: cleaning up test", "nonce", nonce, "route_id", routeID)
+
+	// Undeploy route (idempotent)
+	c.deployer.Undeploy(routeID)
+
+	// Clean up temp files
+	sandboxDir := fmt.Sprintf("/tmp/sandbox/%s", nonce)
+	os.RemoveAll(sandboxDir)
+
+	slog.Info("Sandbox: cleanup complete", "nonce", nonce)
+}
+
+func (c *Connection) sendTestResult(requestID, nonce string, success bool, captures []string, logs string, durationMs int64, errMsg string) {
+	if captures == nil {
+		captures = []string{}
+	}
+	c.sendMessage(&TestResultMessage{
+		Type:       MsgTypeTestResult,
+		RequestID:  requestID,
+		Nonce:      nonce,
+		Success:    success,
+		Captures:   captures,
+		Logs:       logs,
+		DurationMs: durationMs,
+		Error:      errMsg,
+	})
 }
