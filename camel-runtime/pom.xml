@@ -51,6 +51,7 @@
     <dependency>
       <groupId>org.apache.camel</groupId>
       <artifactId>camel-kamelets-catalog</artifactId>
+      <version>4.8.0</version>
     </dependency>
 
     <!-- Observability: health checks (MicroProfile Health) -->
