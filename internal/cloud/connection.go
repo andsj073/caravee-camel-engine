@@ -188,6 +188,38 @@ func (c *Connection) connectAndServe() error {
 	slog.Info("Reported deployed routes", "count", len(deployed), "routes", deployed)
 	slog.Info("Reported local vars", "count", len(localVars))
 
+	// Keepalive: ping every 30s, expect pong within 10s.
+	// Detects silent disconnects (e.g. backend restart without close frame).
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pingInterval + 10*time.Second))
+		return nil
+	})
+	ws.SetReadDeadline(time.Now().Add(pingInterval + 10*time.Second))
+
+	// Ping ticker in background
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				c.mu.Lock()
+				ws := c.ws
+				c.mu.Unlock()
+				if ws != nil {
+					ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+					if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+						return
+					}
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+	defer close(pingDone)
+
 	// Message loop
 	for {
 		_, data, err := ws.ReadMessage()
