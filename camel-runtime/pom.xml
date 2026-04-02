@@ -47,6 +47,12 @@
       <artifactId>camel-quarkus-kamelet</artifactId>
     </dependency>
 
+    <!-- Kamelet catalog — bundled Apache Camel kamelets (log-sink, timer-source, etc.) -->
+    <dependency>
+      <groupId>org.apache.camel.quarkus</groupId>
+      <artifactId>camel-quarkus-kamelet-catalog</artifactId>
+    </dependency>
+
     <!-- Observability: health checks (MicroProfile Health) -->
     <dependency>
       <groupId>io.quarkus</groupId>
