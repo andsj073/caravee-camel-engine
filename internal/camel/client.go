@@ -227,6 +227,30 @@ func (c *Client) GetPlatformHTTPPaths() ([]PlatformHTTPPath, error) {
 	return paths, nil
 }
 
+// GetCamelVersion tries to fetch the Camel version from /q/info or /observe/metrics.
+func (c *Client) GetCamelVersion() string {
+	// Try /q/info first (Quarkus info endpoint)
+	resp, err := c.httpClient.Get(c.baseURL + "/q/info")
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			var info map[string]interface{}
+			if json.NewDecoder(resp.Body).Decode(&info) == nil {
+				if camel, ok := info["camel.version"]; ok {
+					return fmt.Sprintf("%v", camel)
+				}
+				// Try nested: {"camel": {"version": "x.y.z"}}
+				if camelMap, ok := info["camel"].(map[string]interface{}); ok {
+					if v, ok := camelMap["version"]; ok {
+						return fmt.Sprintf("%v", v)
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // ErrNoSidecar is returned when the Camel sidecar is not reachable.
 var ErrNoSidecar = fmt.Errorf("camel sidecar not available")
 

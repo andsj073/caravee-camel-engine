@@ -95,6 +95,9 @@ type ConnectedMessage struct {
 	Type           string            `json:"type"`
 	EngineID       string            `json:"engineId"`
 	Version        string            `json:"version"`
+	CamelVersion   string            `json:"camelVersion,omitempty"`
+	OS             string            `json:"os,omitempty"`
+	Uptime         float64           `json:"uptime,omitempty"`
 	Metadata       map[string]string `json:"metadata"`
 	DeployedRoutes []string   `json:"deployedRoutes"` // Integration IDs currently deployed on disk
 	LocalVars      []LocalVar `json:"localVars"`      // Vars available locally with source info

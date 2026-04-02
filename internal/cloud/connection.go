@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -163,13 +164,23 @@ func (c *Connection) connectAndServe() error {
 		localVars[i] = LocalVar{Name: v.Name, Source: v.Source}
 	}
 
+	// Gather runtime info from Camel sidecar (best-effort)
+	camelVersion := c.camel.GetCamelVersion()
+	var camelUptime float64
+	if m, err := c.camel.GetEngineMetrics(); err == nil {
+		camelUptime = m["process_uptime_seconds"]
+	}
+
 	c.sendMessage(&ConnectedMessage{
-		Type:     MsgTypeConnected,
-		EngineID: c.identity.EngineID,
-		Version:  c.agentVersion,
+		Type:         MsgTypeConnected,
+		EngineID:     c.identity.EngineID,
+		Version:      c.agentVersion,
+		CamelVersion: camelVersion,
+		OS:           runtime.GOOS + "/" + runtime.GOARCH,
+		Uptime:       camelUptime,
 		Metadata: map[string]string{
-			"os":   "linux",
-			"arch": "amd64",
+			"os":   runtime.GOOS,
+			"arch": runtime.GOARCH,
 		},
 		DeployedRoutes: deployed,
 		LocalVars:      localVars,
