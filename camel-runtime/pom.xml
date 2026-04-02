@@ -49,9 +49,9 @@
 
     <!-- Kamelet catalog — bundled Apache Camel kamelets (log-sink, timer-source, etc.) -->
     <dependency>
-      <groupId>org.apache.camel</groupId>
-      <artifactId>camel-kamelets-catalog</artifactId>
-      <version>4.8.0</version>
+      <groupId>org.apache.camel.kamelets</groupId>
+      <artifactId>camel-kamelets</artifactId>
+      <version>4.8.8</version>
     </dependency>
 
     <!-- Observability: health checks (MicroProfile Health) -->
