@@ -419,6 +419,20 @@ func (c *Connection) handleDeploy(dm DeployMessage) {
 		deploySecrets[i] = deploy.SecretEntry{Var: s.Var, Cipher: s.Cipher, Value: s.Value}
 	}
 
+	// Write kamelet files to /data/kamelets/ (if provided)
+	if len(dm.KameletFiles) > 0 {
+		kameletDir := filepath.Join(c.identity.DataDir, "kamelets")
+		os.MkdirAll(kameletDir, 0755)
+		for name, content := range dm.KameletFiles {
+			path := filepath.Join(kameletDir, name)
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				slog.Warn("Failed to write kamelet file", "name", name, "error", err)
+			} else {
+				slog.Info("Kamelet file written", "name", name)
+			}
+		}
+	}
+
 	// Deploy routes — deployer handles decryption and .properties file writing.
 	routeStatuses := make([]RouteStatus, 0, len(dm.Routes))
 	var deployErr error
@@ -838,7 +852,18 @@ func (c *Connection) handleDeployTest(req DeployTestMessage) {
 		slog.Info("Sandbox: wrote test file", "path", path, "bytes", len(content))
 	}
 
-	// 2. Deploy route (no properties or secrets for sandbox — values pre-substituted)
+	// 2. Write kamelet files (if provided)
+	if len(req.KameletFiles) > 0 {
+		kameletDir := filepath.Join(c.identity.DataDir, "kamelets")
+		os.MkdirAll(kameletDir, 0755)
+		for name, content := range req.KameletFiles {
+			path := filepath.Join(kameletDir, name)
+			os.WriteFile(path, []byte(content), 0644)
+			slog.Info("Sandbox: wrote kamelet file", "name", name)
+		}
+	}
+
+	// 3. Deploy route (no properties or secrets for sandbox — values pre-substituted)
 	_, err := c.deployer.Deploy(routeID, req.CamelYAML, nil, nil)
 	if err != nil {
 		c.sendTestResult(req.RequestID, nonce, false, nil, "", time.Since(start).Milliseconds(), fmt.Sprintf("deploy: %v", err))

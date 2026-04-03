@@ -72,6 +72,7 @@ type DeployMessage struct {
 	Routes        []RouteBundle     `json:"routes"`
 	Secrets       []SecretEntry     `json:"secrets,omitempty"`
 	Properties    map[string]string `json:"properties,omitempty"`
+	KameletFiles  map[string]string `json:"kamelet_files,omitempty"` // name.kamelet.yaml → YAML content
 }
 
 type RouteBundle struct {
@@ -293,6 +294,7 @@ type DeployTestMessage struct {
 	RouteID        string            `json:"route_id"`
 	CamelYAML      string            `json:"camel_yaml"`
 	TestFiles      map[string]string `json:"test_files,omitempty"`      // path → content
+	KameletFiles   map[string]string `json:"kamelet_files,omitempty"`   // name.kamelet.yaml → YAML content
 	CaptureTimeout int               `json:"capture_timeout_seconds"`   // default 15
 }
 
