@@ -51,11 +51,8 @@
          Kamelets are deployed as YAML files by the backend/deployer when needed.
          The kamelet runtime (camel-quarkus-kamelet above) loads them from /data/kamelets/. -->
 
-    <!-- Quarkus info endpoint (/q/info) — exposes Camel version, Java version etc. -->
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-info</artifactId>
-    </dependency>
+    <!-- quarkus-info removed: triggered CamelMetricsService crash in combo with other deps.
+         Camel version fetched via agent /observe/health instead. -->
 
     <!-- Observability: health checks (MicroProfile Health) -->
     <dependency>
