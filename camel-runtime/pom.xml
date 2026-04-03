@@ -47,13 +47,9 @@
       <artifactId>camel-quarkus-kamelet</artifactId>
     </dependency>
 
-    <!-- Kamelet catalog — bundled Apache Camel kamelets (log-sink, timer-source, etc.) -->
-    <!-- Using camel-kamelets with matching Camel version from BOM -->
-    <dependency>
-      <groupId>org.apache.camel.kamelets</groupId>
-      <artifactId>camel-kamelets</artifactId>
-      <version>4.8.0</version>
-    </dependency>
+    <!-- Kamelet catalog: NOT bundled in image (causes CamelMetricsService conflict).
+         Kamelets are deployed as YAML files by the backend/deployer when needed.
+         The kamelet runtime (camel-quarkus-kamelet above) loads them from /data/kamelets/. -->
 
     <!-- Quarkus info endpoint (/q/info) — exposes Camel version, Java version etc. -->
     <dependency>
