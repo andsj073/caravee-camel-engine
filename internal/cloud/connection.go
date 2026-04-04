@@ -101,9 +101,14 @@ func (c *Connection) Run() error {
 		default:
 		}
 
+		connStart := time.Now()
 		err := c.connectAndServe()
 		if err != nil {
 			slog.Warn("Connection lost", "error", err, "attempt", attempt)
+		}
+		// Reset attempt counter if we were connected for >30s (successful session)
+		if time.Since(connStart) > 30*time.Second {
+			attempt = 0
 		}
 
 		select {
@@ -112,9 +117,16 @@ func (c *Connection) Run() error {
 		default:
 		}
 
-		// Exponential backoff
-		delay := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt)), float64(maxReconnectDelay)))
-		slog.Info("Reconnecting", "delay", delay)
+		// Fast reconnect for first 5 min (backend upgrade), then slow backoff
+		var delay time.Duration
+		if attempt < 3 {
+			delay = time.Duration(attempt+1) * time.Second // 1s, 2s, 3s
+		} else if attempt < 30 {
+			delay = 5 * time.Second // 5s for ~2 min
+		} else {
+			delay = time.Duration(math.Min(float64(30*time.Second)*math.Pow(1.5, float64(attempt-30)), float64(maxReconnectDelay)))
+		}
+		slog.Info("Reconnecting", "delay", delay, "attempt", attempt)
 		time.Sleep(delay)
 		attempt++
 	}
