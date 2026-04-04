@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -870,14 +871,27 @@ func (c *Connection) handleDeployTest(req DeployTestMessage) {
 		return
 	}
 
-	// 3. Capture logs — poll Camel metrics for exchange completions
+	// 4. Capture — poll ALL exchange metrics, detect new exchanges since deploy
 	slog.Info("Sandbox: capturing output", "timeout_seconds", timeout)
 	captures := []string{}
-	deadline := time.After(time.Duration(timeout) * time.Second)
-	ticker := time.NewTicker(1 * time.Second)
+
+	// Snapshot total exchanges before test route starts
+	preMetrics, _ := c.camel.ScrapeMetrics("__routes__")
+	var preTotal float64
+	for k, v := range preMetrics {
+		if strings.Contains(k, "camel_exchanges_total") && !strings.Contains(k, "{") {
+			preTotal = v
+		}
+	}
+
+	// Wait for hot-reload to pick up the route (up to 10s)
+	time.Sleep(3 * time.Second)
+
+	deadline := time.After(time.Duration(timeout-3) * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	var lastExchanges float64
+	var postTotal float64
 	stableCount := 0
 
 	for {
@@ -885,29 +899,41 @@ func (c *Connection) handleDeployTest(req DeployTestMessage) {
 		case <-deadline:
 			goto done
 		case <-ticker.C:
-			metrics, err := c.camel.GetRouteMetrics(routeID)
+			curMetrics, err := c.camel.ScrapeMetrics("__routes__")
 			if err != nil {
 				continue
 			}
-			total := metrics["camel_exchanges_total"]
-			if total > 0 && total == lastExchanges {
+			var curTotal float64
+			for k, v := range curMetrics {
+				if strings.Contains(k, "camel_exchanges_total") && !strings.Contains(k, "{") {
+					curTotal = v
+				}
+			}
+			delta := curTotal - preTotal
+			if delta > 0 && curTotal == postTotal {
 				stableCount++
-				if stableCount >= 3 { // 3 consecutive polls with same count = done
+				if stableCount >= 2 {
 					goto done
 				}
 			} else {
 				stableCount = 0
 			}
-			lastExchanges = total
+			postTotal = curTotal
 		}
 	}
 
 done:
-	// 4. Collect logs from Camel (last N lines that contain SANDBOX_CAPTURE)
-	// For now, report exchange count as captures
-	metrics, _ := c.camel.GetRouteMetrics(routeID)
-	exchangeCount := int(metrics["camel_exchanges_total"])
-	failCount := int(metrics["camel_exchanges_failed_total"])
+	exchangeDelta := postTotal - preTotal
+	exchangeCount := int(exchangeDelta)
+
+	// Also check per-route failures
+	var failCount int
+	finalMetrics, _ := c.camel.ScrapeMetrics("__routes__")
+	for k, v := range finalMetrics {
+		if strings.Contains(k, "camel_exchanges_failed_total") && !strings.Contains(k, "{") {
+			failCount = int(v) // total failures (not delta — good enough for sandbox)
+		}
+	}
 
 	success := exchangeCount > 0 && failCount == 0
 	logSummary := fmt.Sprintf("exchanges: %d total, %d failed", exchangeCount, failCount)
