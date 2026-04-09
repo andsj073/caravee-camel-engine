@@ -269,50 +269,6 @@ func (d *Deployer) ListDeployed() ([]string, error) {
 	return ids, nil
 }
 
-// resolveSecrets substitutes {{ VAR }} placeholders with local secret values.
-// Lookup order: local secrets (secrets.env) > env vars.
-// Camel-style {{property.name}} references are left as-is for the Camel runtime to resolve.
-// Unresolved placeholders are left as-is.
-func (d *Deployer) resolveSecrets(yaml string) string {
-	var buf strings.Builder
-	remaining := yaml
-
-	for {
-		start := strings.Index(remaining, "{{")
-		if start == -1 {
-			buf.WriteString(remaining)
-			break
-		}
-
-		end := strings.Index(remaining[start:], "}}")
-		if end == -1 {
-			// Unclosed {{ — write rest as-is
-			buf.WriteString(remaining)
-			break
-		}
-		end += start + 2
-
-		varName := strings.TrimSpace(remaining[start+2 : end-2])
-
-		// Write everything before the placeholder
-		buf.WriteString(remaining[:start])
-
-		// Lookup order: local secrets > env vars
-		if v, ok := d.secrets.Get(varName); ok {
-			buf.WriteString(v)
-		} else if v := os.Getenv(varName); v != "" {
-			buf.WriteString(v)
-		} else {
-			// Leave placeholder as-is (may be a Camel property reference resolved at runtime)
-			buf.WriteString(remaining[start:end])
-		}
-
-		remaining = remaining[end:]
-	}
-
-	return buf.String()
-}
-
 // HasVar checks if a var name is available (local secrets > env vars).
 // Returns (value, true) if found, ("", false) if missing.
 // ListVarNames returns just names for backward compat.

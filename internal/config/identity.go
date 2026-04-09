@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"os"
@@ -65,11 +66,11 @@ func loadOrCreateEngineID(dataDir string) (string, error) {
 }
 
 func generateEngineID() string {
-	// Simple UUID-based ID
 	b := make([]byte, 6)
-	f, _ := os.Open("/dev/urandom")
-	f.Read(b)
-	f.Close()
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: this should never happen with crypto/rand
+		slog.Error("Failed to generate random bytes for engine ID", "error", err)
+	}
 	return fmt.Sprintf("caravee-engine-%x", b)
 }
 

@@ -3,6 +3,7 @@ package pairing
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,7 +58,7 @@ func TestLoadPublicKey(t *testing.T) {
 	}
 
 	// Should contain PEM header
-	if !contains(pubKey, "BEGIN PUBLIC KEY") {
+	if !strings.Contains(pubKey, "BEGIN PUBLIC KEY") {
 		t.Error("Public key missing PEM header")
 	}
 }
@@ -101,15 +102,3 @@ func TestLoadPrivateKey(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

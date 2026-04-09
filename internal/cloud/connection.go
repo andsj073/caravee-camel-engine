@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -28,9 +29,11 @@ import (
 )
 
 const (
-	maxReconnectDelay = 300 * time.Second
-	pingInterval      = 30 * time.Second
-	writeTimeout      = 10 * time.Second
+	maxReconnectDelay  = 300 * time.Second
+	pingInterval       = 30 * time.Second
+	writeTimeout       = 10 * time.Second
+	serverPingTimeout  = 45 * time.Second
+	serverPingCheckInt = 10 * time.Second
 )
 
 // runState tracks an in-progress or recently completed run in memory.
@@ -53,6 +56,8 @@ type Connection struct {
 	done         chan struct{}
 	startAt      time.Time
 	agentVersion string
+
+	lastServerPing time.Time // protected by mu
 
 	runStoreOnce sync.Once
 	runStoreInst *runlog.Store
@@ -211,6 +216,11 @@ func (c *Connection) connectAndServe() error {
 	})
 	ws.SetReadDeadline(time.Now().Add(pingInterval + 10*time.Second))
 
+	// Initialize server_ping tracking (first 45s window starts from connect)
+	c.mu.Lock()
+	c.lastServerPing = time.Now()
+	c.mu.Unlock()
+
 	// Ping ticker in background
 	pingDone := make(chan struct{})
 	go func() {
@@ -234,6 +244,33 @@ func (c *Connection) connectAndServe() error {
 		}
 	}()
 	defer close(pingDone)
+
+	// Server ping watchdog: if no server_ping arrives for 45s, force-close WS.
+	// Detects Render proxy absorbing WS pings without forwarding to backend.
+	watchdogDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(serverPingCheckInt)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				c.mu.Lock()
+				elapsed := time.Since(c.lastServerPing)
+				wsConn := c.ws
+				c.mu.Unlock()
+				if elapsed > serverPingTimeout {
+					slog.Warn("No server_ping received, forcing reconnect", "elapsed", elapsed)
+					if wsConn != nil {
+						wsConn.Close()
+					}
+					return
+				}
+			case <-watchdogDone:
+				return
+			}
+		}
+	}()
+	defer close(watchdogDone)
 
 	// Message loop
 	for {
@@ -332,12 +369,18 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 
 	case MsgTypeGetEngineMetrics:
 		var req GetEngineMetricsMessage
-		json.Unmarshal(msg.Raw, &req)
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
 		go c.handleGetEngineMetrics(req)
 
 	case MsgTypeGetRouteMetrics:
 		var req GetRouteMetricsMessage
-		json.Unmarshal(msg.Raw, &req)
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
 		go c.handleGetRouteMetrics(req)
 
 	case MsgTypeCheckVars:
@@ -364,6 +407,12 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 		}
 		c.handleUndeploy(um)
 
+	case MsgTypeServerPing:
+		c.mu.Lock()
+		c.lastServerPing = time.Now()
+		c.mu.Unlock()
+		c.sendMessage(map[string]string{"type": MsgTypeClientPong})
+
 	case MsgTypePing:
 		c.sendMessage(&PongMessage{
 			Type:          MsgTypePong,
@@ -376,7 +425,10 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 
 	case MsgTypeSetLabel:
 		var raw map[string]string
-		json.Unmarshal(msg.Raw, &raw)
+		if err := json.Unmarshal(msg.Raw, &raw); err != nil {
+			slog.Warn("Invalid set_label message", "error", err)
+			return
+		}
 		if label, ok := raw["label"]; ok {
 			c.cfg.Label = label
 			slog.Info("Label updated", "label", label)
@@ -384,7 +436,10 @@ func (c *Connection) handleMessage(msg InboundMessage) {
 
 	case MsgTypeGetHTTPPaths:
 		var req GetHTTPPathsMessage
-		json.Unmarshal(msg.Raw, &req)
+		if err := json.Unmarshal(msg.Raw, &req); err != nil {
+			c.sendError(msg.RequestID, "INVALID_MESSAGE", err.Error())
+			return
+		}
 		go c.handleGetHTTPPaths(req)
 
 	case MsgTypeGetRunHistory:
@@ -654,13 +709,6 @@ func (c *Connection) handleGetHTTPPaths(req GetHTTPPathsMessage) {
 	c.sendMessage(result)
 }
 
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func (c *Connection) handleCheckVars(msg CheckVarsMessage) {
 	present := make([]string, 0)
 	missing := make([]string, 0)
@@ -704,7 +752,7 @@ func (c *Connection) handleRouteCommand(msgType string, cmd RouteCommandMessage)
 	}
 
 	if err != nil {
-		if err == camel.ErrNoSidecar {
+		if errors.Is(err, camel.ErrNoSidecar) {
 			// No Camel sidecar — report desired state so cloud can track it in DB
 			slog.Warn("No Camel sidecar — reporting desired state", "type", msgType, "route", cmd.RouteID)
 			// result.Status already set above; treat as success so cloud updates DB
@@ -829,13 +877,6 @@ func routeIDs(routes []RouteBundle) []string {
 		ids[i] = r.ID
 	}
 	return ids
-}
-
-func (c *Connection) decryptSecret(cipherBase64 string) (string, error) {
-	if c.privKey == nil {
-		return "", fmt.Errorf("private key not loaded")
-	}
-	return pairing.DecryptSecret(cipherBase64, c.privKey)
 }
 
 // ─── Sandbox test handlers ──────────────────────────────────────────────
