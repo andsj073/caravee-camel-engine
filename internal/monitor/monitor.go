@@ -113,6 +113,14 @@ func (m *Monitor) check() {
 		exchangeDelta := totalExchanges - prevExchanges
 		if exchangeDelta > 0 {
 			m.exchangesBaseline[routeID] = totalExchanges
+		} else if totalExchanges < prevExchanges {
+			// Counter reset: route was undeployed then redeployed, which
+			// resets Camel's metric counter. Treat the full current value
+			// as the delta and reset baseline.
+			slog.Info("Exchange counter reset detected", "route", routeID,
+				"prev", prevExchanges, "now", totalExchanges)
+			m.exchangesBaseline[routeID] = totalExchanges
+			exchangeDelta = totalExchanges
 		} else if prevExchanges == 0 {
 			m.exchangesBaseline[routeID] = totalExchanges
 		}
