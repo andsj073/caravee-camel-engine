@@ -21,6 +21,7 @@ import (
 	"github.com/caravee/engine/internal/camel"
 	"github.com/caravee/engine/internal/config"
 	"github.com/caravee/engine/internal/deploy"
+	"github.com/caravee/engine/internal/events"
 	"github.com/caravee/engine/internal/monitor"
 	"github.com/caravee/engine/internal/pairing"
 	"github.com/caravee/engine/internal/runlog"
@@ -97,6 +98,11 @@ func (c *Connection) Run() error {
 	mon := monitor.New(c.camel, c)
 	mon.Start()
 	defer mon.Stop()
+
+	// Start exchange event watcher (push-based per-exchange runs from Camel EventNotifier)
+	evtWatcher := events.NewWatcher(c.identity.DataDir, c)
+	evtWatcher.Start()
+	defer evtWatcher.Stop()
 
 	attempt := 0
 	for {
@@ -632,6 +638,57 @@ func (c *Connection) RecordExchangeBatch(integrationID string, count int64, fail
 
 	// Send latest completed run to cloud
 	runs, _, err := store.QueryRuns(integrationID, runlog.StatusCompleted, 1, 0)
+	if err == nil && len(runs) > 0 {
+		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
+	}
+}
+
+// RecordExchangeEvent satisfies events.RunRecorder — records a single run
+// from a push-based Camel exchange event (ExchangeEventNotifier).
+// This provides exact per-exchange timestamps and body previews,
+// unlike the polling-based RecordExchangeBatch which approximates.
+func (c *Connection) RecordExchangeEvent(evt events.ExchangeEvent) {
+	store := c.getRunStore()
+	if store == nil {
+		return
+	}
+
+	runID := runlog.GenerateRunID()
+	status := runlog.StatusCompleted
+	if evt.Status == "failed" {
+		status = runlog.StatusFailed
+	}
+
+	run := runlog.Run{
+		RunID:         runID,
+		IntegrationID: evt.RouteID,
+		EngineID:      c.identity.EngineID,
+		Status:        status,
+		StartedAt:     evt.Timestamp,
+		FinishedAt:    evt.Timestamp,
+		DurationMs:    evt.DurationMs,
+		MessageCount:  1,
+	}
+	if evt.Error != "" {
+		run.ErrorSummary = evt.Error
+	}
+
+	if err := store.StartRun(run); err != nil {
+		slog.Warn("RecordExchangeEvent: StartRun failed", "err", err)
+		return
+	}
+	if status == runlog.StatusCompleted {
+		if err := store.CompleteRun(runID, 1, 0); err != nil {
+			slog.Warn("RecordExchangeEvent: CompleteRun failed", "err", err)
+		}
+	} else {
+		if err := store.FailRun(runID, evt.Error, ""); err != nil {
+			slog.Warn("RecordExchangeEvent: FailRun failed", "err", err)
+		}
+	}
+
+	// Push latest to cloud
+	runs, _, err := store.QueryRuns(evt.RouteID, "", 1, 0)
 	if err == nil && len(runs) > 0 {
 		c.sendMessage(&RunEventMessage{Type: MsgTypeRunEvent, Run: runs[0]})
 	}
